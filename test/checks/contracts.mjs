@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { createResultEnvelope } from "../../src/artifacts/index.ts";
+import { DEFAULT_RUN_TIMEOUT_MS } from "../../src/core/constants.ts";
 import { validateResolveInput } from "../../src/core/validation.ts";
 import {
 	createRunStatusSnapshot,
@@ -72,6 +73,15 @@ assert.deepEqual(validation.input.extensions, ["/tmp/extension.ts"]);
 assert.equal(validation.input.captureToolCalls, true);
 assert.equal(validation.input.runsDir, ".pi/custom-runs");
 assert.equal(validation.input.correlationId, "corr_contracts");
+assert.equal(validation.input.timeoutMs, 5000);
+
+const defaultTimeoutValidation = validateResolveInput({
+	agent: "worker",
+	task: "inspect",
+});
+assert.equal(defaultTimeoutValidation.ok, true);
+assert.equal(defaultTimeoutValidation.input.timeoutMs, DEFAULT_RUN_TIMEOUT_MS);
+assert.equal(DEFAULT_RUN_TIMEOUT_MS, 600_000);
 
 const sessionIdValidation = validateResolveInput({
 	agent: "worker",

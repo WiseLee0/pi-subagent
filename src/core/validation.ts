@@ -2,6 +2,7 @@ import {
 	AGENT_SCOPES,
 	ASYNC_DEPENDENCIES,
 	BACKENDS,
+	DEFAULT_RUN_TIMEOUT_MS,
 	EXECUTION_MODES,
 	ON_COMPLETE_ACTIONS,
 	THINKING_LEVELS,
@@ -476,7 +477,7 @@ export function validateResolveInput(
 		return failure("subagent input must be an object.");
 	}
 
-	const input: ResolveInput = {};
+	const input: ResolveInput = { timeoutMs: DEFAULT_RUN_TIMEOUT_MS };
 	let backend: Backend | undefined;
 
 	if (raw.backend !== undefined) {

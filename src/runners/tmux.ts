@@ -19,7 +19,12 @@ import {
 	type SandboxInput,
 	type Status,
 } from "../core/constants.ts";
-import { SandboxUnavailableError, withSandboxedArgv } from "../sandbox/srt.ts";
+import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
+import {
+	createPiAgentSandboxOverlay,
+	SandboxUnavailableError,
+	withSandboxedArgv,
+} from "../sandbox/srt.ts";
 import {
 	preparePrivateTmuxSocket,
 	privateTmuxServerAlive,
@@ -424,6 +429,7 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 	delete childEnv.TMUX;
 	delete childEnv.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
 	Object.assign(childEnv, options.childEnv ?? {});
+	childEnv[PI_SUBAGENT_CHILD_ENV] = "1";
 	childEnv = withoutShellStartupAuthority(childEnv);
 	const ownershipToken = randomBytes(32).toString("hex");
 	const ownershipTokenSha256 = tmuxOwnershipTokenDigest(ownershipToken);
@@ -676,14 +682,21 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 		}
 	}
 
+	let agentOverlay: Awaited<
+		ReturnType<typeof createPiAgentSandboxOverlay>
+	> | undefined;
 	try {
+		agentOverlay = options.sandbox
+			? await createPiAgentSandboxOverlay(childEnv, cwd)
+			: undefined;
+		if (agentOverlay !== undefined) childEnv = agentOverlay.env;
 		if (options.sandbox) {
 			return await withSandboxedArgv(
 				[process.execPath, scriptPath],
 				{
 					sandbox: options.sandbox,
 					cwd,
-					writablePaths: [store.taskDir],
+					writablePaths: [store.taskDir, agentOverlay!.agentDir],
 					allowPty: true,
 					signal: options.signal,
 				},
@@ -746,6 +759,8 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 			},
 			stderr: `${error.message}\n`,
 		};
+	} finally {
+		await agentOverlay?.cleanup();
 	}
 }
 

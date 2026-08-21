@@ -70,7 +70,7 @@ function assertSafeRunsDir(cwd: string, runsDir: string | undefined): void {
 		);
 }
 
-function runIndexDir(): string {
+export function runLocatorIndexDir(): string {
 	const override = process.env.PI_SUBAGENT_RUN_INDEX_DIR;
 	return resolve(
 		override && override.length > 0
@@ -81,7 +81,7 @@ function runIndexDir(): string {
 
 function runLocatorPath(runId: string): string {
 	assertSafeId("runId", runId);
-	return join(runIndexDir(), `${runId}.json`);
+	return join(runLocatorIndexDir(), `${runId}.json`);
 }
 
 const DEFAULT_LOCATOR_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
@@ -199,7 +199,7 @@ export async function readRunLocator(
 }
 
 export async function listRunLocators(): Promise<RunLocatorListResult> {
-	const indexDir = runIndexDir();
+	const indexDir = runLocatorIndexDir();
 	const entries = await readdir(indexDir, { withFileTypes: true }).catch(
 		() => [],
 	);

@@ -13,6 +13,7 @@ import {
 	AGENT_SCOPES,
 	ASYNC_DEPENDENCIES,
 	BACKENDS,
+	DEFAULT_RUN_TIMEOUT_MS,
 	EXECUTION_MODES,
 	ON_COMPLETE_ACTIONS,
 	THINKING_LEVELS,
@@ -26,6 +27,7 @@ import {
 import { resolveBackend } from "./core/resolver.ts";
 import { clip } from "./core/text-width.ts";
 import { validateResolveInput } from "./core/validation.ts";
+import { maybePruneSubagentRuns } from "./maintenance/prune.ts";
 import {
 	startAsyncParallelSubagentRuns,
 	startAsyncSubagentRun,
@@ -122,7 +124,12 @@ const SUBAGENT_TASK_SCHEMA = Type.Object({
 	sandbox: Type.Optional(SANDBOX_SCHEMA),
 	visible: Type.Optional(Type.Boolean()),
 	cwd: Type.Optional(Type.String({ minLength: 1 })),
-	timeoutMs: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+	timeoutMs: Type.Optional(
+		Type.Number({
+			exclusiveMinimum: 0,
+			description: `Worker execution deadline in milliseconds. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
+		}),
+	),
 	model: Type.Optional(Type.String({ minLength: 1 })),
 	thinking: Type.Optional(
 		Type.Union(THINKING_LEVELS.map((value) => Type.Literal(value))),
@@ -760,6 +767,7 @@ function notifyCompletion(
 }
 
 export default function registerSubagentEngine(pi: ExtensionAPI) {
+	void maybePruneSubagentRuns().catch(() => undefined);
 	if (typeof pi.registerCommand === "function") {
 		pi.registerCommand("subagent", {
 			description:
@@ -786,6 +794,7 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 					ctx.ui.notify?.("Usage: /subagent panel", "warning");
 					return;
 				}
+				await maybePruneSubagentRuns().catch(() => undefined);
 				await showSubagentPanel(ctx);
 			},
 		});
@@ -862,7 +871,12 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			onComplete: Type.Optional(
 				Type.Union(ON_COMPLETE_ACTIONS.map((value) => Type.Literal(value))),
 			),
-			timeoutMs: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+			timeoutMs: Type.Optional(
+				Type.Number({
+					exclusiveMinimum: 0,
+					description: `Worker execution deadline in milliseconds. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
+				}),
+			),
 			model: Type.Optional(
 				Type.String({
 					minLength: 1,
@@ -987,6 +1001,7 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 				const lifecycle = await lifecycleAction(raw, cwd);
 				if (lifecycle !== null) return lifecycle;
 
+				await maybePruneSubagentRuns().catch(() => undefined);
 				const validation = validateResolveInput(params);
 				if (!validation.ok) return validationFailure(validation.failure);
 

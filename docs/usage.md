@@ -292,12 +292,23 @@ For `status`, `logs`, `wait`, `interrupt`, `mark-background`, and `reconcile`, t
 
 The locator index is only a pointer for finding runs across cwd boundaries. `run.json`, `events.jsonl`, and attempt `result.json` files remain the source of truth. Malformed or oversized locator files older than the locator-prune threshold are removed during index reads; the default threshold is 30 days and can be tuned with `PI_SUBAGENT_RUN_LOCATOR_PRUNE_AFTER_MS` (`-1` disables pruning). The panel also prunes old missing-directory locators after session/cwd pre-filtering so global scans do not touch every run directory unnecessarily.
 
+### Artifact retention
+
+The extension runs opportunistic maintenance at startup, before a new run, and before opening the panel. Maintenance is globally locked and throttled to once per 24 hours, so multiple Pi processes do not concurrently delete the same artifacts. Only terminal runs with no active attempt are eligible:
+
+- completed runs are retained for 7 days;
+- failed and cancelled runs are retained for 30 days;
+- pending/running runs are never removed automatically;
+- missing-directory locators are removed only after the locator-prune threshold.
+
+Deleting a run also removes its global locator. Retention can be tuned with millisecond environment variables: `PI_SUBAGENT_MAINTENANCE_INTERVAL_MS`, `PI_SUBAGENT_COMPLETED_RETENTION_MS`, and `PI_SUBAGENT_FAILED_RETENTION_MS`. Set an individual value to `-1` to disable that maintenance interval or retention class.
+
 ## Common run options
 
 | Option | Use |
 |---|---|
 | `cwd` | Run from a specific project directory. Existing-run actions accept `cwd` to force a registry location; if omitted, recent runs can be found by global locator and older runs fall back to the current cwd. |
-| `timeoutMs` | Limit worker execution time for `run`; limit polling duration for `action: "wait"`. Omit it for no runtime kill deadline; `wait` alone defaults to 60s polling. |
+| `timeoutMs` | Limit worker execution time for `run`; defaults to 600,000 ms (10 minutes). For `action: "wait"`, it limits polling duration and defaults to 60 seconds. |
 | `visible` | Use a visible tmux-backed worker (`visible: true`). |
 | `concurrency` | Cap parallel run fan-out. |
 | `failFast` | For synchronous parallel runs, stop scheduling new siblings after the first failed result. |
@@ -484,9 +495,9 @@ These options may also be set per task in `tasks[]`.
 
 Timeout notes:
 
-- `timeoutMs` on a run is the worker execution deadline. If omitted, pi-subagent does not impose a run timeout.
+- `timeoutMs` on a run is the worker execution deadline. If omitted, pi-subagent defaults it to 600,000 ms (10 minutes). An explicit value overrides the default.
 - `action:"wait"` uses `timeoutMs` as a polling deadline and defaults to 60 seconds. Its `status:"completed"` means polling reached a terminal run; check `snapshot.status` for run success/failure/cancellation.
-- `onComplete:"notify"` uses an internal completion monitor with a long safety window (up to 24h when no `timeoutMs` is set); it does not kill the worker. The monitor polls in the parent process and has no cancellation handle, so long-lived SDK embeddings should prefer `onComplete:"detach"` plus explicit `action:"status"`/`"wait"` polling. Orchestrators that need a 4h or other SLA should pass `timeoutMs` explicitly on the run.
+- `onComplete:"notify"` uses an internal completion monitor with a long safety window; it does not kill the worker. The monitor polls in the parent process and has no cancellation handle, so long-lived SDK embeddings should prefer `onComplete:"detach"` plus explicit `action:"status"`/`"wait"` polling. Orchestrators that need a 4h or other SLA should pass `timeoutMs` explicitly on the run.
 
 ## Artifacts
 

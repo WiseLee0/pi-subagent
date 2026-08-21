@@ -1,3 +1,17 @@
+import type { Dirent } from "node:fs";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdtemp,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { sandboxAllowedDomains, type SandboxInput } from "../core/constants.ts";
 
 interface SandboxRuntimeConfig {
@@ -51,6 +65,77 @@ export class SandboxUnavailableError extends Error {
 let sandboxQueue: Promise<void> = Promise.resolve();
 let sandboxPoisonedError: Error | undefined;
 const SANDBOX_RESET_TIMEOUT_MS = 5_000;
+const PI_AGENT_OVERLAY_PREFIX = "pi-subagent-agent-";
+
+function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"))) {
+    return join(homedir(), path.slice(2));
+  }
+  return path;
+}
+
+function piAgentDir(env: NodeJS.ProcessEnv, cwd: string): string {
+  const configuredAgentDir = env.PI_CODING_AGENT_DIR;
+  return configuredAgentDir
+    ? resolve(cwd, expandHome(configuredAgentDir))
+    : join(homedir(), ".pi", "agent");
+}
+
+export interface PiAgentSandboxOverlay {
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+  cleanup(): Promise<void>;
+}
+
+export async function createPiAgentSandboxOverlay(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): Promise<PiAgentSandboxOverlay> {
+  const sourceAgentDir = piAgentDir(env, cwd);
+  const overlayAgentDir = await mkdtemp(join(tmpdir(), PI_AGENT_OVERLAY_PREFIX));
+
+  try {
+    await chmod(overlayAgentDir, 0o700);
+    let entries: Dirent[];
+    try {
+      entries = await readdir(sourceAgentDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      entries = [];
+    }
+
+    for (const entry of entries) {
+      if (entry.name.endsWith(".lock")) continue;
+      const sourcePath = join(sourceAgentDir, entry.name);
+      const overlayPath = join(overlayAgentDir, entry.name);
+      if (entry.isFile()) {
+        await copyFile(sourcePath, overlayPath);
+        const sourceMode = (await lstat(sourcePath)).mode & 0o777;
+        await chmod(overlayPath, sourceMode);
+      } else if (entry.isDirectory()) {
+        await symlink(await realpath(sourcePath), overlayPath, "dir");
+      } else if (entry.isSymbolicLink()) {
+        const target = await readlink(sourcePath);
+        await symlink(resolve(sourceAgentDir, target), overlayPath);
+      }
+    }
+  } catch (error) {
+    await rm(overlayAgentDir, { recursive: true, force: true });
+    const message = error instanceof Error ? error.message : String(error);
+    throw new SandboxUnavailableError(
+      `could not prepare Pi agent sandbox overlay: ${message}`,
+    );
+  }
+
+  return {
+    agentDir: overlayAgentDir,
+    env: { ...env, PI_CODING_AGENT_DIR: overlayAgentDir },
+    cleanup: async () => {
+      await rm(overlayAgentDir, { recursive: true, force: true });
+    },
+  };
+}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;

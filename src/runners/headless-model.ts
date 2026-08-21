@@ -32,7 +32,12 @@ import type {
 	ToolResultBudgetInput,
 } from "../core/constants.ts";
 import { sandboxAllowedDomains } from "../core/constants.ts";
-import { SandboxUnavailableError, withSandboxedArgv } from "../sandbox/srt.ts";
+import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
+import {
+	createPiAgentSandboxOverlay,
+	SandboxUnavailableError,
+	withSandboxedArgv,
+} from "../sandbox/srt.ts";
 import {
 	flushToolCallTelemetry,
 	ToolCallTelemetryCollector,
@@ -1093,14 +1098,24 @@ export async function runHeadlessModel(
 										String(forceEvictFraction),
 								}),
 					};
+		let agentOverlay: Awaited<
+			ReturnType<typeof createPiAgentSandboxOverlay>
+		> | undefined;
 		try {
+			agentOverlay = options.sandbox
+				? await createPiAgentSandboxOverlay(explicitEnv, cwd)
+				: undefined;
+			const childEnv = {
+				...(agentOverlay?.env ?? explicitEnv),
+				[PI_SUBAGENT_CHILD_ENV]: "1",
+			};
 			return options.sandbox
 				? await withSandboxedArgv(
 						argv,
 						{
 							sandbox: options.sandbox,
 							cwd,
-							writablePaths: [store.taskDir],
+							writablePaths: [store.taskDir, agentOverlay!.agentDir],
 							signal: options.signal,
 						},
 						(launch) =>
@@ -1113,7 +1128,7 @@ export async function runHeadlessModel(
 								options.signal,
 								(() => {
 									const env: NodeJS.ProcessEnv = {
-										...explicitEnv,
+										...childEnv,
 										...(launch.env ?? {}),
 										...(attemptEnv ?? {}),
 									};
@@ -1133,7 +1148,7 @@ export async function runHeadlessModel(
 						store,
 						options.captureToolCalls,
 						options.signal,
-						{ ...explicitEnv, ...(attemptEnv ?? {}) },
+						{ ...childEnv, ...(attemptEnv ?? {}) },
 						options.onProcessStart,
 					);
 		} catch (error) {
@@ -1157,6 +1172,8 @@ export async function runHeadlessModel(
 					stderrText: error.message,
 				}),
 			};
+		} finally {
+			await agentOverlay?.cleanup();
 		}
 	}
 

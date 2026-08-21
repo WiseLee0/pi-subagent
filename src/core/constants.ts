@@ -42,6 +42,7 @@ export const AGENT_SCOPES = ["auto", "global", "project"] as const;
 export const WORKSPACE_MODES = ["shared", "worktree", "auto"] as const;
 export const WORKTREE_POLICIES = ["auto", "required", "never"] as const;
 export const ON_COMPLETE_ACTIONS = ["return", "notify", "detach"] as const;
+export const DEFAULT_RUN_TIMEOUT_MS = 600_000;
 export const THINKING_LEVELS = [
 	"off",
 	"minimal",
