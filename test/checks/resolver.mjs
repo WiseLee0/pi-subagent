@@ -35,10 +35,9 @@ const cases = [
     errorIncludes: "visible execution requires backend",
   },
   {
-    name: "inline with sandbox fails validation",
+    name: "inline with sandbox is promoted to headless",
     input: { backend: "inline", sandbox: true, agent: "worker", task: "inspect" },
-    expected: { backend: "inline", status: "failed", failureKind: "validation" },
-    errorIncludes: "inline backend cannot provide",
+    expected: { backend: "headless", status: "completed" },
   },
   {
     name: "unknown backend fails validation",

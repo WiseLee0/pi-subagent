@@ -801,7 +801,6 @@ export function validateResolveInput(
 	if (thinking !== undefined) input.thinking = thinking;
 
 	const requested = backend ?? "auto";
-	const sandboxed = input.sandbox !== undefined && input.sandbox !== null;
 
 	if (input.durableLaunchBarrier !== undefined) {
 		if (input.mode === "parallel" || input.tasks !== undefined) {
@@ -826,13 +825,6 @@ export function validateResolveInput(
 		return failure(
 			'visible execution requires backend "tmux" or "auto"; explicit non-tmux backends cannot run visibly.',
 			failureBackend(backend),
-		);
-	}
-
-	if (requested === "inline" && sandboxed) {
-		return failure(
-			"inline backend cannot provide a per-subagent OS sandbox; choose headless, tmux, or auto.",
-			"inline",
 		);
 	}
 

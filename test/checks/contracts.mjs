@@ -299,18 +299,17 @@ const sandboxUnknownKey = validateResolveInput({
 assert.equal(sandboxUnknownKey.ok, false);
 assert.match(sandboxUnknownKey.failure.error, /unsupported sandbox option/);
 
-// Inline backend still rejects any sandbox form.
+// Validation accepts inline + sandbox so the resolver can promote it to headless.
 const inlineObjectSandbox = validateResolveInput({
 	backend: "inline",
 	sandbox: { allowedDomains: ["api.anthropic.com"] },
 	agent: "worker",
 	task: "inspect",
 });
-assert.equal(inlineObjectSandbox.ok, false);
-assert.match(
-	inlineObjectSandbox.failure.error,
-	/inline backend cannot provide/,
-);
+assert.equal(inlineObjectSandbox.ok, true);
+assert.deepEqual(inlineObjectSandbox.input.sandbox, {
+	allowedDomains: ["api.anthropic.com"],
+});
 
 // Result envelope records the sandbox network policy.
 const sandboxedResult = createResultEnvelope({

@@ -342,7 +342,7 @@ Rules:
 - `sandbox: true` enables sandboxing with **no network access** (deny-all). `false`, `null`, or omission disables sandboxing.
 - `sandbox: { allowedDomains: [...] }` enables sandboxing with explicit network egress.
 - Process-backed workers (`headless`, `tmux`) can be sandboxed.
-- `inline + sandbox` fails validation because an in-process SDK worker cannot provide per-worker OS sandboxing.
+- `inline + sandbox` is automatically promoted to `headless` because an in-process SDK worker cannot provide per-worker OS sandboxing.
 - The public API intentionally does not expose sandbox engine selection yet.
 
 ### Sandbox network policy

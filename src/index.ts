@@ -807,7 +807,10 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			"Subagent engine. Executes headless/tmux/inline workers; supports workspace:auto/worktree isolation, bounded parallel fanout, async lifecycle lookup, mark-background, reconcile, and conservative interrupt. Workspaces default to shared; set worktree:true for parallel tasks that mutate files.",
 		parameters: Type.Object({
 			backend: Type.Optional(
-				Type.Union(BACKENDS.map((value) => Type.Literal(value))),
+				Type.Union(BACKENDS.map((value) => Type.Literal(value)), {
+					description:
+						"Worker backend. Defaults to auto. Sandboxed inline requests are promoted to headless because inline cannot enforce an OS sandbox.",
+				}),
 			),
 			visible: Type.Optional(Type.Boolean()),
 			sandbox: Type.Optional(SANDBOX_SCHEMA),
