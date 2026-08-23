@@ -308,7 +308,7 @@ Deleting a run also removes its global locator. Retention can be tuned with mill
 | Option | Use |
 |---|---|
 | `cwd` | Run from a specific project directory. Existing-run actions accept `cwd` to force a registry location; if omitted, recent runs can be found by global locator and older runs fall back to the current cwd. |
-| `timeoutMs` | Limit worker execution time for `run`; defaults to 600,000 ms (10 minutes). For `action: "wait"`, it limits polling duration and defaults to 60 seconds. |
+| `timeoutMs` | Limit worker execution time for `run`; defaults to 900,000 ms (15 minutes). For `action: "wait"`, it limits polling duration and defaults to 60 seconds. |
 | `visible` | Use a visible tmux-backed worker (`visible: true`). |
 | `concurrency` | Cap parallel run fan-out. |
 | `failFast` | For synchronous parallel runs, stop scheduling new siblings after the first failed result. |
@@ -495,7 +495,7 @@ These options may also be set per task in `tasks[]`.
 
 Timeout notes:
 
-- `timeoutMs` on a run is the worker execution deadline. If omitted, pi-subagent defaults it to 600,000 ms (10 minutes). An explicit value overrides the default.
+- `timeoutMs` on a run is the worker execution deadline. If omitted, pi-subagent defaults it to 900,000 ms (15 minutes). An explicit value overrides the default.
 - `action:"wait"` uses `timeoutMs` as a polling deadline and defaults to 60 seconds. Its `status:"completed"` means polling reached a terminal run; check `snapshot.status` for run success/failure/cancellation.
 - `onComplete:"notify"` uses an internal completion monitor with a long safety window; it does not kill the worker. The monitor polls in the parent process and has no cancellation handle, so long-lived SDK embeddings should prefer `onComplete:"detach"` plus explicit `action:"status"`/`"wait"` polling. Orchestrators that need a 4h or other SLA should pass `timeoutMs` explicitly on the run.
 
