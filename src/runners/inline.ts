@@ -433,32 +433,44 @@ async function promptWithStops(
 ): Promise<FailureKind | null> {
 	let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 	let settled = false;
+	let resolveStop: (kind: FailureKind | null) => void = () => {};
 
-	const promptPromise = session.prompt(prompt);
-	const stopPromise = new Promise<FailureKind | null>((resolveStop) => {
-		function stop(kind: FailureKind): void {
-			if (settled) return;
-			settled = true;
-			void session.abort?.();
-			resolveStop(kind);
-		}
+	function stop(kind: FailureKind): void {
+		if (settled) return;
+		settled = true;
+		void session.abort?.();
+		resolveStop(kind);
+	}
 
-		if (timeoutMs !== undefined)
-			timeoutTimer = setTimeout(() => stop("timeout"), timeoutMs);
-		if (signal !== undefined) {
-			if (signal.aborted) stop("abort");
-			else
-				signal.addEventListener("abort", () => stop("abort"), { once: true });
-		}
+	function recordActivity(): void {
+		if (settled || timeoutMs === undefined) return;
+		if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+		timeoutTimer = setTimeout(() => stop("timeout"), timeoutMs);
+	}
+
+	const unsubscribeActivity = session.subscribe?.(() => recordActivity());
+	const onAbort = () => stop("abort");
+	const stopPromise = new Promise<FailureKind | null>((resolve) => {
+		resolveStop = resolve;
 	});
 
-	const result = await Promise.race([
-		promptPromise.then(() => null),
-		stopPromise,
-	]);
-	settled = true;
-	if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-	return result;
+	recordActivity();
+	if (signal !== undefined) {
+		if (signal.aborted) stop("abort");
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
+
+	try {
+		return await Promise.race([
+			session.prompt(prompt).then(() => null),
+			stopPromise,
+		]);
+	} finally {
+		settled = true;
+		if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+		if (typeof unsubscribeActivity === "function") unsubscribeActivity();
+		signal?.removeEventListener("abort", onAbort);
+	}
 }
 
 export async function runInlineModel(

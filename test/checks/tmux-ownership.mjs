@@ -253,6 +253,36 @@ await new Promise((resolveSleep) => setTimeout(resolveSleep, 2_000));
 		);
 		assert.equal(await pathExists(paneGateSideEffect), true);
 
+		const activePi = join(tempRoot, "tmux-active-pi.mjs");
+		await writeFile(
+			activePi,
+			`#!/usr/bin/env node
+let index = 0;
+const timer = setInterval(() => {
+  index += 1;
+  process.stdout.write(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: String(index) }] } }) + "\\n");
+  if (index < 6) return;
+  clearInterval(timer);
+  process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "tmux-inactivity-reset-ok" }], provider: "fake", model: "fake/model", usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end" } }) + "\\n");
+}, 250);
+`,
+			{ mode: 0o700 },
+		);
+		const activeResult = await runTmuxModel({
+			cwd: paneGateCwd,
+			runId: "run_tmux_inactivity_reset",
+			attemptId: "attempt_tmux_inactivity_reset",
+			piCommand: activePi,
+			agent: "active-worker",
+			task: "stay active beyond the inactivity window",
+			timeoutMs: 1_000,
+		});
+		assert.equal(
+			activeResult.status,
+			"completed",
+			`active tmux worker should outlive the inactivity window: ${JSON.stringify(activeResult)}`,
+		);
+
 		const hungOwnershipAbort = new AbortController();
 		const hungOwnershipStartedAt = Date.now();
 		const hungOwnershipRun = runTmuxModel({

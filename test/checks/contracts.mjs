@@ -81,7 +81,7 @@ const defaultTimeoutValidation = validateResolveInput({
 });
 assert.equal(defaultTimeoutValidation.ok, true);
 assert.equal(defaultTimeoutValidation.input.timeoutMs, DEFAULT_RUN_TIMEOUT_MS);
-assert.equal(DEFAULT_RUN_TIMEOUT_MS, 900_000);
+assert.equal(DEFAULT_RUN_TIMEOUT_MS, 300_000);
 
 const sessionIdValidation = validateResolveInput({
 	agent: "worker",

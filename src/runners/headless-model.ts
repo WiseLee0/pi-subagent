@@ -761,6 +761,7 @@ async function runProcess(
 		let ownershipError: unknown;
 		let stopKind: "timeout" | "abort" | null = null;
 		let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+		let inactivityTimeoutStarted = false;
 		let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
 		let ownershipTimer: ReturnType<typeof setTimeout> | null = null;
 		let authorizedProcessGroupId: number | undefined;
@@ -803,6 +804,18 @@ async function runProcess(
 			forceKillTimer ??= setTimeout(() => {
 				signalChild("SIGKILL");
 			}, 1_000);
+		}
+
+		function recordActivity(): void {
+			if (
+				!inactivityTimeoutStarted ||
+				timeoutMs === undefined ||
+				settled ||
+				stopKind !== null
+			)
+				return;
+			if (timeoutTimer) clearTimeout(timeoutTimer);
+			timeoutTimer = setTimeout(() => requestStop("timeout"), timeoutMs);
 		}
 
 		function onAbort(): void {
@@ -891,10 +904,12 @@ async function runProcess(
 		}
 
 		child.stdout?.on("data", (chunk: Buffer | string) => {
+			recordActivity();
 			parser.push(toBuffer(chunk));
 		});
 
 		child.stderr?.on("data", (chunk: Buffer | string) => {
+			recordActivity();
 			const buffer = toBuffer(chunk);
 			const text = buffer.toString("utf8");
 			stderrText = appendLimited(stderrText, text, STDERR_TEXT_LIMIT);
@@ -1028,9 +1043,8 @@ async function runProcess(
 						})}\n`,
 					);
 					if (timeoutMs !== undefined) {
-						timeoutTimer = setTimeout(() => {
-							requestStop("timeout");
-						}, timeoutMs);
+						inactivityTimeoutStarted = true;
+						recordActivity();
 					}
 				})
 				.catch(rejectOwnership);

@@ -127,7 +127,7 @@ const SUBAGENT_TASK_SCHEMA = Type.Object({
 	timeoutMs: Type.Optional(
 		Type.Number({
 			exclusiveMinimum: 0,
-			description: `Worker execution deadline in milliseconds. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
+			description: `Worker inactivity timeout in milliseconds. Resets on worker output or SDK events. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
 		}),
 	),
 	model: Type.Optional(Type.String({ minLength: 1 })),
@@ -874,7 +874,7 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			timeoutMs: Type.Optional(
 				Type.Number({
 					exclusiveMinimum: 0,
-					description: `Worker execution deadline in milliseconds. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
+					description: `Worker inactivity timeout in milliseconds. Resets on worker output or SDK events. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
 				}),
 			),
 			model: Type.Optional(
