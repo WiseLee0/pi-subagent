@@ -103,14 +103,14 @@ const SANDBOX_SCHEMA = Type.Union(
 			allowedDomains: Type.Optional(
 				Type.Array(Type.String({ minLength: 1 }), {
 					description:
-						'Network domains the sandboxed child may reach, e.g. "api.anthropic.com" or "*.npmjs.org". Model-backed sandboxed runs must include their provider endpoint. Omitted means deny-all network.',
+						'Additional network domains the sandboxed child may reach, e.g. "github.com" or "*.npmjs.org". The active built-in model provider domain is allowed automatically.',
 				}),
 			),
 		}),
 	],
 	{
 		description:
-			"true = offline OS sandbox; { allowedDomains: [...] } = sandbox with explicit network egress; false/null = no sandbox.",
+			"true = OS sandbox with automatic model-provider egress; { allowedDomains: [...] } adds explicit egress domains; false/null = no sandbox.",
 	},
 );
 const SUBAGENT_TASK_SCHEMA = Type.Object({
@@ -1108,6 +1108,28 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 					input: validation.input,
 					cwd: runCwd,
 					signal,
+					onProgress: (progress) => {
+						if (onUpdate === undefined) return;
+						const elapsedSeconds = Math.floor(progress.elapsedMs / 1_000);
+						const payload = {
+							tool: TOOL_NAME,
+							status: "running",
+							runId: progress.runId,
+							attemptId: progress.attemptId,
+							backend: progress.backend,
+							phase: progress.phase,
+							elapsedMs: progress.elapsedMs,
+						};
+						onUpdate({
+							content: [
+								{
+									type: "text",
+									text: `Subagent ${progress.phase === "started" ? "started" : "running"} (${elapsedSeconds}s)`,
+								},
+							],
+							details: payload,
+						});
+					},
 				});
 				return textResult(
 					compactResult(result),

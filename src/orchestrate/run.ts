@@ -8,6 +8,7 @@ import {
 	createAttemptId,
 	createRunId,
 	readRunRecord,
+	recordAttemptHeartbeat,
 	updateAttemptProcess,
 	upsertRunAttempt,
 	type ProcessMetadata,
@@ -40,9 +41,19 @@ export const DEFAULT_PARALLEL_CONCURRENCY = 4;
 export const MAX_PARALLEL_TASKS = 12;
 export const MAX_PARALLEL_CONCURRENCY = 10;
 
+export interface SubagentProgress {
+	runId: string;
+	attemptId: string;
+	backend: ResolvedBackend;
+	phase: "started" | "running";
+	elapsedMs: number;
+}
+
 export interface RunSubagentTaskOptions {
 	input: ResolveInput;
 	cwd: string;
+	/** Best-effort progress callback for synchronous callers. */
+	onProgress?: (progress: SubagentProgress) => void;
 	/** Explicit binding for this execution only; absent means child env must unset it. */
 	durableWorkerBinding?: string;
 	/** Preflight marker used to reject inline before a durable barrier emits READY. */
@@ -537,7 +548,7 @@ async function writeOwnedExecutionFailure(
 
 export async function runPreparedSubagentExecution(
 	prepared: PreparedSubagentExecution,
-	options: Pick<RunSubagentTaskOptions, "signal"> & {
+	options: Pick<RunSubagentTaskOptions, "signal" | "onProgress"> & {
 		deferTerminalCommit?: boolean;
 	} = {},
 ): Promise<ResultEnvelope> {
@@ -600,6 +611,25 @@ export async function runPreparedSubagentExecution(
 		correlationId: input.correlationId,
 	}).catch(() => undefined);
 
+	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+	const reportProgress = (phase: SubagentProgress["phase"]): void => {
+		try {
+			options.onProgress?.({
+				runId,
+				attemptId,
+				backend,
+				phase,
+				elapsedMs: Math.max(0, Date.now() - startedAt.getTime()),
+			});
+		} catch {
+			// Progress reporting must never change the task result.
+		}
+	};
+	const heartbeat = (): void => {
+		void recordAttemptHeartbeat({ ...runRef, attemptId }).catch(() => undefined);
+		reportProgress("running");
+	};
+
 	try {
 		const cwd = workspace.cwd;
 
@@ -612,6 +642,9 @@ export async function runPreparedSubagentExecution(
 				message: `attempt ${attemptId} started`,
 			},
 		);
+		reportProgress("started");
+		heartbeatTimer = setInterval(heartbeat, 5_000);
+		heartbeatTimer.unref?.();
 
 		const onProcessStart = async (process: ProcessMetadata) => {
 			const beforeUpdate = await readRunRecord(runRef);
@@ -782,6 +815,8 @@ export async function runPreparedSubagentExecution(
 		// The owning entry point commits the fallback result after this method
 		// releases model/workspace control.
 		throw error;
+	} finally {
+		if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
 	}
 }
 
@@ -792,6 +827,7 @@ export async function runSubagentTask(
 	try {
 		return await runPreparedSubagentExecution(prepared, {
 			signal: options.signal,
+			onProgress: options.onProgress,
 		});
 	} catch (error) {
 		if (terminalCommitBlocked(error)) throw error;

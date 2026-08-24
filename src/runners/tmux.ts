@@ -20,8 +20,10 @@ import {
 	type Status,
 } from "../core/constants.ts";
 import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
+import { resolveModelProviderDomains } from "../sandbox/model-network.ts";
 import {
 	createPiAgentSandboxOverlay,
+	mergePiAgentSandboxEnv,
 	SandboxUnavailableError,
 	withSandboxedArgv,
 } from "../sandbox/srt.ts";
@@ -70,6 +72,7 @@ interface RunTmuxProcessOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	sandbox?: SandboxInput | false | null;
+	modelProviderDomains?: readonly string[];
 	workspace?: Partial<ResultWorkspace>;
 	childEnv?: NodeJS.ProcessEnv;
 	onTmuxStart?: RunHeadlessModelOptions["onTmuxStart"];
@@ -706,15 +709,17 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 				{
 					sandbox: options.sandbox,
 					cwd,
+					modelProviderDomains: options.modelProviderDomains,
 					writablePaths: [store.taskDir, agentOverlay!.agentDir],
 					allowPty: true,
 					signal: options.signal,
 				},
 				async (launch) => {
-					let sandboxEnv = {
-						...childEnv,
-						...(launch.env ?? {}),
-					};
+					let sandboxEnv = mergePiAgentSandboxEnv(
+						childEnv,
+						launch.env,
+						agentOverlay!,
+					);
 					sandboxEnv = withoutShellStartupAuthority(sandboxEnv);
 					delete sandboxEnv.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
 					const explicitBinding =
@@ -777,8 +782,18 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 export async function runTmuxModel(
 	options: RunTmuxModelOptions,
 ): Promise<ResultEnvelope> {
+	const modelProviderDomains = resolveModelProviderDomains({
+		model: options.model,
+		env: { ...process.env, ...(options.childEnv ?? {}) },
+	});
 	const sandbox = options.sandbox
-		? { enabled: true, allowedDomains: sandboxAllowedDomains(options.sandbox) }
+		? {
+				enabled: true,
+				allowedDomains: sandboxAllowedDomains(
+					options.sandbox,
+					modelProviderDomains,
+				),
+			}
 		: { enabled: false };
 	if (typeof options.agent !== "string" || options.agent.length === 0) {
 		throw new Error("agent must be a non-empty string.");
@@ -792,7 +807,11 @@ export async function runTmuxModel(
 		options.sessionId,
 	);
 	const { result, store, cwd, artifactCwd, startedAt, failure, stderr } =
-		await runTmuxProcess({ ...options, argv: buildPiArgv(options) });
+		await runTmuxProcess({
+			...options,
+			modelProviderDomains,
+			argv: buildPiArgv(options),
+		});
 	if (result === null) {
 		const artifacts: ArtifactRef[] = [
 			await store.writeTextArtifact("stderr", stderr ?? ""),

@@ -339,19 +339,19 @@ Deleting a run also removes its global locator. Retention can be tuned with mill
 
 Rules:
 
-- `sandbox: true` enables sandboxing with **no network access** (deny-all). `false`, `null`, or omission disables sandboxing.
-- `sandbox: { allowedDomains: [...] }` enables sandboxing with explicit network egress.
+- `sandbox: true` enables sandboxing and automatically allows the active built-in model Provider domain. `false`, `null`, or omission disables sandboxing.
+- `sandbox: { allowedDomains: [...] }` enables sandboxing, allows the model Provider domain, and adds explicit task-specific network egress.
 - Process-backed workers (`headless`, `tmux`) can be sandboxed.
 - `inline + sandbox` is automatically promoted to `headless` because an in-process SDK worker cannot provide per-worker OS sandboxing.
 - The public API intentionally does not expose sandbox engine selection yet.
 
 ### Sandbox network policy
 
-The whole child Pi process runs inside the sandbox boundary, so the model API call itself needs network access. A sandboxed model-backed run must therefore allow its provider endpoint explicitly:
+The whole child Pi process runs inside the sandbox boundary, so the model API call itself needs network access. The runtime resolves the active built-in Provider from the requested model or inherited `PI_PROVIDER`/`PI_MODEL` values and automatically adds its model endpoint. `allowedDomains` is for additional task-specific access:
 
 ```json
 {
-  "sandbox": { "allowedDomains": ["api.anthropic.com"] },
+  "sandbox": { "allowedDomains": ["github.com", "*.npmjs.org"] },
   "agent": "implementer",
   "task": "Make the requested local change and run the checks."
 }
@@ -361,12 +361,13 @@ Rules:
 
 - Domains are bare hostnames (`api.anthropic.com`) or `*.example.com`-style wildcards. Protocols, paths, ports, and broad wildcards such as `*.com` are rejected.
 - `deniedDomains` is not exposed; the policy is allow-only.
-- `sandbox: true` keeps deny-all network. Use it for offline work: running local checks, formatting, builds against vendored dependencies.
-- The effective `allowedDomains` are recorded in the result envelope (`result.sandbox.allowedDomains`) for audit.
+- If a custom Provider cannot be inferred from Pi's built-in model catalog, list its endpoint explicitly in `allowedDomains`.
+- Fully unrestricted network is intentionally unsupported by sandbox-runtime; use `sandbox: false` when that is required.
+- The effective model and task domains are recorded in the result envelope (`result.sandbox.allowedDomains`) for audit.
 
 Guidance:
 
-- The caller decides per run, following least privilege: list the model provider endpoint the child will use, plus any extra domains the task itself needs (for example `github.com` or `*.npmjs.org` for installs).
+- The caller decides per run, following least privilege: list only extra domains the task itself needs (for example `github.com` or `*.npmjs.org` for installs).
 - Do not sandbox open-ended research tasks; the domains they need cannot be enumerated in advance, and headless workers cannot prompt for approval. Use an unsandboxed worker with worktree isolation instead (filesystem safety without network limits).
 
 ## Workspaces and worktrees
@@ -519,6 +520,8 @@ Runs write durable evidence under:
 `run.json` records a `parentSessionId` field: the Pi session id of the session that launched the run, injected from the tool context (not a model-settable argument). Consumers (e.g. status panels) can use it to scope a shared per-`cwd` runs directory to the session that owns each run. The field is omitted when no session id is available, and older records simply lack it.
 
 Recent runs also write a small locator file under Pi's global subagent-run index. A locator contains the `runId`, absolute `cwd`, optional `runsDir`, optional `parentSessionId`, optional `correlationId`, and `updatedAt`. It is not authoritative evidence and can become stale if the pointed-to run directory is moved or deleted; use `run.json`, `events.jsonl`, and attempt `result.json` as the source of truth.
+
+Synchronous runs refresh the active attempt heartbeat every five seconds and publish a compact running update to Pi's tool UI. This keeps long inline runs visibly alive even though their final output and result artifacts are written only after completion. Heartbeats are best-effort observability signals and do not alter timeout or terminal-result semantics.
 
 Older `schemaVersion: 1` artifacts under `<run-id>/<task-id>/` are still readable for compatibility.
 

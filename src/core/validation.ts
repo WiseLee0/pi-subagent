@@ -250,7 +250,7 @@ function validateSandbox(
 		return sandbox;
 	}
 	return failure(
-		`${fieldName} must be a boolean or an options object when provided. Use true for an offline sandbox, { allowedDomains: [...] } to allow network egress, or false/null to disable sandboxing.`,
+		`${fieldName} must be a boolean or an options object when provided. Use true for a sandbox with automatic model-provider egress, { allowedDomains: [...] } to add network domains, or false/null to disable sandboxing.`,
 		backend,
 	);
 }

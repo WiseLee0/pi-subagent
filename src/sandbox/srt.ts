@@ -50,6 +50,7 @@ export interface SandboxLaunch {
 export interface SandboxWrapOptions {
   sandbox: SandboxInput;
   cwd: string;
+  modelProviderDomains?: readonly string[];
   writablePaths?: readonly string[];
   allowPty?: boolean;
   signal?: AbortSignal;
@@ -86,6 +87,22 @@ export interface PiAgentSandboxOverlay {
   agentDir: string;
   env: NodeJS.ProcessEnv;
   cleanup(): Promise<void>;
+}
+
+export function mergePiAgentSandboxEnv(
+  childEnv: NodeJS.ProcessEnv,
+  launchEnv: NodeJS.ProcessEnv | undefined,
+  overlay: PiAgentSandboxOverlay,
+  extraEnv?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return {
+    ...childEnv,
+    ...(launchEnv ?? {}),
+    ...(extraEnv ?? {}),
+    // sandbox-runtime may return a full copy of the parent environment. Keep the
+    // writable overlay authoritative so Pi never locks the real ~/.pi/agent.
+    PI_CODING_AGENT_DIR: overlay.agentDir,
+  };
 }
 
 export async function createPiAgentSandboxOverlay(
@@ -154,12 +171,20 @@ async function importSandboxRuntime(): Promise<SandboxRuntimeModule> {
   }
 }
 
-function defaultConfig(sandbox: SandboxInput, cwd: string, writablePaths: readonly string[], allowPty: boolean): SandboxRuntimeConfig {
+function defaultConfig(
+  sandbox: SandboxInput,
+  modelProviderDomains: readonly string[],
+  cwd: string,
+  writablePaths: readonly string[],
+  allowPty: boolean,
+): SandboxRuntimeConfig {
   const allowWrite = Array.from(new Set([cwd, ...writablePaths]));
   return {
     // Empty allowedDomains means deny-all network in @anthropic-ai/sandbox-runtime.
-    // Callers opt into egress per run via sandbox.allowedDomains.
-    network: { allowedDomains: sandboxAllowedDomains(sandbox), deniedDomains: [] },
+    network: {
+      allowedDomains: sandboxAllowedDomains(sandbox, modelProviderDomains),
+      deniedDomains: [],
+    },
     filesystem: { denyRead: [], allowWrite, denyWrite: [] },
     ignoreViolations: {},
     allowPty,
@@ -205,7 +230,13 @@ export async function withSandboxedArgv<T>(
       throw new SandboxUnavailableError(`sandbox dependencies are not available: ${dependencyCheck.errors.join("; ")}`);
     }
 
-    const config = defaultConfig(options.sandbox, options.cwd, options.writablePaths ?? [], options.allowPty ?? false);
+    const config = defaultConfig(
+      options.sandbox,
+      options.modelProviderDomains ?? [],
+      options.cwd,
+      options.writablePaths ?? [],
+      options.allowPty ?? false,
+    );
     validateConfig(srt, config);
 
     let result!: T;

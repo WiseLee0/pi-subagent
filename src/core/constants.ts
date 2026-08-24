@@ -73,10 +73,9 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export interface SandboxOptionsInput {
 	/**
-	 * Network domains the sandboxed child process may reach (e.g. "api.anthropic.com",
-	 * "*.npmjs.org"). The whole child Pi runs inside the sandbox boundary, so the model
-	 * provider endpoint must be listed here for model-backed runs to work. Omitted or
-	 * empty means no network access (deny-all), matching `sandbox: true`.
+	 * Additional network domains the sandboxed child process may reach (e.g.
+	 * "github.com", "*.npmjs.org"). The active model provider domain is added
+	 * automatically. Custom providers that Pi cannot infer must still be listed here.
 	 */
 	allowedDomains?: string[];
 }
@@ -85,15 +84,11 @@ export type SandboxInput = true | SandboxOptionsInput;
 
 export function sandboxAllowedDomains(
 	sandbox: SandboxInput | false | null | undefined,
+	modelProviderDomains: readonly string[] = [],
 ): string[] {
-	if (
-		sandbox === undefined ||
-		sandbox === null ||
-		sandbox === false ||
-		sandbox === true
-	)
-		return [];
-	return sandbox.allowedDomains ?? [];
+	if (sandbox === undefined || sandbox === null || sandbox === false) return [];
+	const additionalDomains = sandbox === true ? [] : (sandbox.allowedDomains ?? []);
+	return Array.from(new Set([...modelProviderDomains, ...additionalDomains]));
 }
 
 export interface WorkspaceInput {

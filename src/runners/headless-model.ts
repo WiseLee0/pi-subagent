@@ -33,8 +33,10 @@ import type {
 } from "../core/constants.ts";
 import { sandboxAllowedDomains } from "../core/constants.ts";
 import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
+import { resolveModelProviderDomains } from "../sandbox/model-network.ts";
 import {
 	createPiAgentSandboxOverlay,
+	mergePiAgentSandboxEnv,
 	SandboxUnavailableError,
 	withSandboxedArgv,
 } from "../sandbox/srt.ts";
@@ -1068,6 +1070,10 @@ export async function runHeadlessModel(
 	const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const artifactCwd = resolve(options.artifactCwd ?? cwd);
+	const modelProviderDomains = resolveModelProviderDomains({
+		model: options.model,
+		env: { ...process.env, ...(options.childEnv ?? {}) },
+	});
 	const sessionMetadata = await resultSessionMetadata(cwd, options.sessionId);
 	const startedAt = new Date();
 	const store = await createAttemptArtifactStore({
@@ -1129,6 +1135,7 @@ export async function runHeadlessModel(
 						{
 							sandbox: options.sandbox,
 							cwd,
+							modelProviderDomains,
 							writablePaths: [store.taskDir, agentOverlay!.agentDir],
 							signal: options.signal,
 						},
@@ -1141,11 +1148,12 @@ export async function runHeadlessModel(
 								options.captureToolCalls,
 								options.signal,
 								(() => {
-									const env: NodeJS.ProcessEnv = {
-										...childEnv,
-										...(launch.env ?? {}),
-										...(attemptEnv ?? {}),
-									};
+									const env = mergePiAgentSandboxEnv(
+										childEnv,
+										launch.env,
+										agentOverlay!,
+										attemptEnv,
+									);
 									delete env.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
 									if (explicitBinding !== undefined)
 										env.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON =
@@ -1259,7 +1267,10 @@ export async function runHeadlessModel(
 		sandbox: options.sandbox
 			? {
 					enabled: true,
-					allowedDomains: sandboxAllowedDomains(options.sandbox),
+					allowedDomains: sandboxAllowedDomains(
+						options.sandbox,
+						modelProviderDomains,
+					),
 				}
 			: { enabled: false },
 		exitCode: outcome.exitCode,
