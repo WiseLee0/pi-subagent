@@ -17,7 +17,10 @@ import {
 	type FailureKind,
 	type ThinkingLevel,
 } from "../core/constants.ts";
-import { detectContextLengthExceeded, sumUsageValues } from "./headless-model.ts";
+import {
+	detectContextLengthExceeded,
+	sumUsageValues,
+} from "./headless-model.ts";
 import {
 	flushToolCallTelemetry,
 	ToolCallTelemetryCollector,
@@ -121,9 +124,7 @@ interface SdkModelContext {
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
 	if (timeoutMs === undefined) return undefined;
 	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-		throw new Error(
-			"timeoutMs must be a positive finite number when provided.",
-		);
+		throw new Error("timeoutMs must be a positive finite number when provided.");
 	}
 	return timeoutMs;
 }
@@ -153,7 +154,10 @@ function findPackageRoot(
 }
 
 function assertPiSdkModule(value: unknown): PiSdkModule {
-	if ((typeof value !== "object" || value === null) && typeof value !== "function")
+	if (
+		(typeof value !== "object" || value === null) &&
+		typeof value !== "function"
+	)
 		throw new Error("Pi SDK module did not export an object namespace.");
 	const candidate = value as Record<string, unknown>;
 	const modelRegistry = candidate.ModelRegistry as
@@ -229,9 +233,7 @@ async function importPiSdk(): Promise<SdkImportResult> {
 			"@earendil-works/pi-coding-agent/package.json",
 		);
 		return {
-			module: assertPiSdkModule(
-				await import("@earendil-works/pi-coding-agent"),
-			),
+			module: assertPiSdkModule(await import("@earendil-works/pi-coding-agent")),
 			source: dirname(packageJson),
 		};
 	} catch (projectError) {
@@ -240,9 +242,7 @@ async function importPiSdk(): Promise<SdkImportResult> {
 			piBin = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
 		} catch {
 			const message =
-				projectError instanceof Error
-					? projectError.message
-					: String(projectError);
+				projectError instanceof Error ? projectError.message : String(projectError);
 			throw new Error(
 				`Could not import @earendil-works/pi-coding-agent and could not find pi on PATH. Project import error: ${message}`,
 			);
@@ -314,6 +314,7 @@ export function assistantMetadataFromMessages(messages: unknown): {
 	model?: string;
 	usage?: unknown;
 	stopReason?: string;
+	errorMessage?: string;
 } {
 	if (!Array.isArray(messages)) return {};
 	const metadata: {
@@ -321,6 +322,7 @@ export function assistantMetadataFromMessages(messages: unknown): {
 		model?: string;
 		usage?: unknown;
 		stopReason?: string;
+		errorMessage?: string;
 	} = {};
 	for (const message of messages) {
 		if (typeof message !== "object" || message === null) continue;
@@ -330,8 +332,12 @@ export function assistantMetadataFromMessages(messages: unknown): {
 		if (typeof record.model === "string") metadata.model = record.model;
 		if (record.usage !== undefined)
 			metadata.usage = sumUsageValues(metadata.usage, record.usage);
-		if (typeof record.stopReason === "string")
+		delete metadata.errorMessage;
+		if (typeof record.stopReason === "string") {
 			metadata.stopReason = record.stopReason;
+			if (record.stopReason === "error" && typeof record.errorMessage === "string")
+				metadata.errorMessage = record.errorMessage;
+		}
 	}
 	return metadata;
 }
@@ -550,8 +556,7 @@ export async function runInlineModel(
 
 	try {
 		const { module: piSdk, source } = await importPiSdk();
-		const { modelRegistry, sessionOptions } =
-			await createSdkModelContext(piSdk);
+		const { modelRegistry, sessionOptions } = await createSdkModelContext(piSdk);
 		const sessionManager = piSdk.SessionManager.inMemory(cwd);
 		const resourceLoader = createChildResourceLoader(piSdk, options, cwd);
 		await resourceLoader.reload();
@@ -607,6 +612,14 @@ export async function runInlineModel(
 			session.dispose?.();
 		}
 
+		// The SDK can resolve prompt() after a provider error has been finalized
+		// as an assistant message. Only the final assistant stop reason decides
+		// the outcome: an earlier error may have been recovered by a retry.
+		if (failureKind === null && assistantMetadata.stopReason === "error") {
+			failureKind = "model";
+			stderrText += `${assistantMetadata.errorMessage ?? "Inline SDK session ended with a provider error."}\n`;
+		}
+
 		if (diagnostics.length > 0)
 			stderrText += `${JSON.stringify({ sdkSource: source, diagnostics })}\n`;
 	} catch (error) {
@@ -625,7 +638,11 @@ export async function runInlineModel(
 	const cancelledByAbort = failureKind === "abort";
 	if (cancelledByAbort) failureKind = abortFailureKind(options.signal);
 	const status =
-		failureKind === null ? "completed" : cancelledByAbort ? "cancelled" : "failed";
+		failureKind === null
+			? "completed"
+			: cancelledByAbort
+				? "cancelled"
+				: "failed";
 	const artifacts: ArtifactRef[] = [
 		await store.writeTextArtifact("stderr", stderrText),
 		await store.writeTextArtifact("output", outputText),
