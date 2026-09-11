@@ -51,6 +51,8 @@ export interface SandboxWrapOptions {
   sandbox: SandboxInput;
   cwd: string;
   modelProviderDomains?: readonly string[];
+  /** Effective child environment, including its private Pi agent overlay. */
+  env?: NodeJS.ProcessEnv;
   writablePaths?: readonly string[];
   allowPty?: boolean;
   signal?: AbortSignal;
@@ -192,8 +194,9 @@ function defaultConfig(
   cwd: string,
   writablePaths: readonly string[],
   allowPty: boolean,
+  env: NodeJS.ProcessEnv,
 ): SandboxRuntimeConfig {
-  const allowWrite = Array.from(new Set([cwd, ...writablePaths, ...piAgentDirLockPaths(process.env, cwd)]));
+  const allowWrite = Array.from(new Set([cwd, ...writablePaths, ...piAgentDirLockPaths(env, cwd)]));
   return {
     // Empty allowedDomains means deny-all network in @anthropic-ai/sandbox-runtime.
     network: {
@@ -251,6 +254,7 @@ export async function withSandboxedArgv<T>(
       options.cwd,
       options.writablePaths ?? [],
       options.allowPty ?? false,
+      options.env ?? process.env,
     );
     validateConfig(srt, config);
 

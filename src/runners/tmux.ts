@@ -713,6 +713,7 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 					cwd,
 					modelProviderDomains: options.modelProviderDomains,
 					writablePaths: [store.taskDir, agentOverlay!.agentDir],
+					env: childEnv,
 					allowPty: true,
 					signal: options.signal,
 				},

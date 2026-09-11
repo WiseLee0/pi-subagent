@@ -6,6 +6,8 @@ import { createJiti } from "jiti";
 
 const indexDir = await mkdtemp(join(tmpdir(), "pi-subagent-prune-index-"));
 process.env.PI_SUBAGENT_RUN_INDEX_DIR = indexDir;
+// Explicit prune fixtures must not race startup retention maintenance.
+process.env.PI_SUBAGENT_MAINTENANCE_INTERVAL_MS = "-1";
 
 const { beginRunRecord, readRunRecord, upsertRunAttempt } = await import("../../src/artifacts/registry.ts");
 const { readRunLocator, writeRunLocator } = await import("../../src/orchestrate/run-ref.ts");

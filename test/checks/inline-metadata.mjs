@@ -10,10 +10,12 @@ import { runInlineModel, setInlineSdkImporterForTests } from "../../src/runners/
 // error. Inline results must carry provider/model/usage/stopReason in every case.
 function fakeSdk({ behavior }) {
 	const messages = [];
+	const subscribers = new Set();
 	const session = {
 		messages,
-		subscribe() {
-			return () => undefined;
+		subscribe(listener) {
+			subscribers.add(listener);
+			return () => subscribers.delete(listener);
 		},
 		async prompt() {
 			messages.push({ role: "user", content: [{ type: "text", text: "hi" }] });
@@ -40,6 +42,12 @@ function fakeSdk({ behavior }) {
 			}
 			if (behavior === "recovered") {
 				messages.push({ role: "assistant", content: [{ type: "text", text: "retry failed" }], stopReason: "error", errorMessage: "recovered error" });
+			}
+			if (behavior === "active") {
+				for (let i = 0; i < 6; i++) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					for (const listener of subscribers) listener({ type: "message_update" });
+				}
 			}
 			if (behavior === "hang") await new Promise(() => undefined);
 			messages.push({
@@ -101,6 +109,11 @@ try {
 	assert.equal(completed.metadata.model, "fake/model");
 	assert.deepEqual(completed.metadata.usage, { input: 15, output: 3, cost: { total: 0.015 } });
 	assert.equal(completed.metadata.stopReason, "stop");
+
+	const active = await run("active", { timeoutMs: 300 });
+	assert.equal(active.status, "completed", "SDK activity resets the inactivity timeout");
+	const inactive = await run("hang", { timeoutMs: 100 });
+	assert.equal(inactive.failureKind, "timeout", "silence still times out");
 
 	const finalError = await run("final-error");
 	assert.equal(finalError.status, "failed", JSON.stringify(finalError));

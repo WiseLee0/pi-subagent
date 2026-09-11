@@ -16,6 +16,7 @@ import { resolveModelProviderDomains } from "../../src/sandbox/model-network.ts"
 import {
 	createPiAgentSandboxOverlay,
 	mergePiAgentSandboxEnv,
+	piAgentDirLockPaths,
 } from "../../src/sandbox/srt.ts";
 
 assert.deepEqual(
@@ -53,6 +54,10 @@ const overlay = await createPiAgentSandboxOverlay({
 });
 try {
 	assert.equal(overlay.env.PI_CODING_AGENT_DIR, overlay.agentDir);
+	for (const lockPath of piAgentDirLockPaths(overlay.env)) {
+		assert.ok(lockPath.startsWith(`${overlay.agentDir}/`));
+		assert.ok(!lockPath.startsWith(`${sourceAgentDir}/`));
+	}
 	assert.equal(
 		await readFile(join(overlay.agentDir, "settings.json"), "utf8"),
 		'{"theme":"dark"}\n',

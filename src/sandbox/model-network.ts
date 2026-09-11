@@ -1,4 +1,4 @@
-import { getModels, type KnownProvider } from "@earendil-works/pi-ai";
+import { getBuiltinModels, type BuiltinProvider } from "@earendil-works/pi-ai/providers/all";
 
 export interface ModelProviderDomainOptions {
 	model?: string;
@@ -31,7 +31,7 @@ export function resolveModelProviderDomains({
 	if (!provider) return [];
 
 	try {
-		const models = getModels(provider as KnownProvider);
+		const models = getBuiltinModels(provider as BuiltinProvider);
 		const selected =
 			models.find((candidate) => candidate.id === requested.model) ?? models[0];
 		if (!selected?.baseUrl) return [];

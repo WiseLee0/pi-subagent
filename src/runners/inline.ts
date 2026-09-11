@@ -497,23 +497,23 @@ async function promptWithStops(
 		timeoutTimer = setTimeout(() => stop("timeout"), timeoutMs);
 	}
 
-	const unsubscribeActivity = session.subscribe?.(() => recordActivity());
+	let unsubscribeActivity: (() => void) | undefined;
 	const onAbort = () => stop("abort");
 	const stopPromise = new Promise<FailureKind | null>((resolve) => {
 		resolveStop = resolve;
 	});
 
-	recordActivity();
-	if (signal !== undefined) {
-		if (signal.aborted) stop("abort");
-		else signal.addEventListener("abort", onAbort, { once: true });
-	}
-
 	try {
-		return await Promise.race([
-			session.prompt(prompt).then(() => null),
-			stopPromise,
-		]);
+		unsubscribeActivity = session.subscribe?.(() => recordActivity());
+		recordActivity();
+		// Start before handling an already-aborted signal, so abort cannot run
+		// before prompt and then accidentally leave newly started work alive.
+		const promptPromise = session.prompt(prompt);
+		if (signal !== undefined) {
+			if (signal.aborted) stop("abort");
+			else signal.addEventListener("abort", onAbort, { once: true });
+		}
+		return await Promise.race([promptPromise.then(() => null), stopPromise]);
 	} finally {
 		settled = true;
 		if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);

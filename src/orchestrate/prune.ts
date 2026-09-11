@@ -129,7 +129,7 @@ async function directoryBytes(path: string): Promise<number> {
 	return total;
 }
 
-async function removeLocatorIfOwned(
+export async function removeLocatorIfOwned(
 	runId: string,
 	cwd: string,
 	runsDir: string,
@@ -155,7 +155,7 @@ async function removeLocatorIfOwned(
  * into a deletion elsewhere on disk. Returns null when the directory does
  * not exist (nothing to prune).
  */
-async function resolvePhysicalRunsDir(
+export async function resolvePhysicalRunsDir(
 	cwd: string,
 	runsDir: string,
 ): Promise<{ physicalCwd: string; physicalRunsDir: string } | null> {

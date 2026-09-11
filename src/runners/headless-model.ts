@@ -1162,6 +1162,7 @@ export async function runHeadlessModel(
 							cwd,
 							modelProviderDomains,
 							writablePaths: [store.taskDir, agentOverlay!.agentDir],
+							env: childEnv,
 							signal: options.signal,
 						},
 						(launch) =>

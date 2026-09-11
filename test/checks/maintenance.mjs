@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, stat, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { runPaths } from "../../src/artifacts/registry.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -80,6 +82,58 @@ try {
 	await stat(recentCompleted);
 	await stat(recentFailed);
 	await stat(running);
+
+	// Automatic retention must use the same terminal validation and physical
+	// containment as explicit prune, not a raw recursive rm.
+	const activeTask = await createRun("run_active_task", "completed", 90);
+	const malformed = await createRun("run_malformed", "completed", 90);
+	async function patchRecord(dir, patch) {
+		const path = join(dir, "run.json");
+		const record = JSON.parse(await readFile(path, "utf8"));
+		await writeFile(path, JSON.stringify({ ...record, ...patch }));
+	}
+	await patchRecord(activeTask, { tasks: [{ taskId: "task_live", status: "running" }] });
+	await patchRecord(malformed, { attempts: [{ attemptId: "bad", status: "unknown" }] });
+	const outside = join(fixtureRoot, "outside");
+	await mkdir(outside);
+	await writeFile(join(outside, "keep.txt"), "do not delete");
+	const linkedProject = join(fixtureRoot, "linked-project");
+	await mkdir(linkedProject);
+	await symlink(runsDir, join(linkedProject, "runs"), "dir");
+	await writeRunLocator({ runId: "run_recent_completed", cwd: linkedProject, runsDir: "runs" });
+	// Another project points outside its physical cwd through an ancestor.
+	await symlink(outside, join(projectDir, "external-runs"), "dir");
+	await mkdir(join(outside, "run_external"));
+	await writeRunLocator({ runId: "run_external", cwd: projectDir, runsDir: "external-runs" });
+	await symlink(outside, join(runsDir, "run_symlink"), "dir");
+	await writeRunLocator({ runId: "run_symlink", cwd: projectDir });
+	await pruneSubagentRuns({ now });
+	await stat(activeTask);
+	await stat(malformed);
+	await stat(join(outside, "keep.txt"));
+	await stat(join(outside, "run_external"));
+	await stat(recentCompleted);
+
+	// Hold the registry's sibling lock while retention scans an eligible run.
+	// A concurrent generation update must be re-read *after* taking that lock.
+	const changing = await createRun("run_generation_race", "completed", 90);
+	const paths = runPaths({ cwd: projectDir, runId: "run_generation_race" });
+	const lockfile = createRequire(import.meta.url)("proper-lockfile");
+	const release = await lockfile.lock(paths.runDir, {
+		realpath: false, lockfilePath: paths.lockPath, stale: 10_000, retries: 0,
+	});
+	let settled = false;
+	const pending = pruneSubagentRuns({ now }).finally(() => { settled = true; });
+	try {
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		assert.equal(settled, false, "maintenance must wait for the per-run lock");
+		await stat(changing);
+		await patchRecord(changing, { updatedAt: now.toISOString() });
+	} finally {
+		await release();
+		await pending;
+	}
+	await stat(changing);
 
 	process.env.PI_SUBAGENT_CHILD = "1";
 	const childMaintenance = await maybePruneSubagentRuns({ now });

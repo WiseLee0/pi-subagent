@@ -166,7 +166,7 @@ export async function pruneStaleRunLocators(
 ): Promise<number> {
 	const maxDeletes = options.maxDeletes ?? LOCATOR_SWEEP_MAX_DELETES;
 	const now = options.now ?? Date.now();
-	const indexDir = runIndexDir();
+	const indexDir = runLocatorIndexDir();
 	const entries = await readdir(indexDir, { withFileTypes: true }).catch(
 		() => [],
 	);

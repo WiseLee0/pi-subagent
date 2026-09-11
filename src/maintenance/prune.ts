@@ -4,11 +4,11 @@ import {
 	mkdir,
 	readFile,
 	rename,
-	rm,
 	writeFile,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { readRunRecord, runPaths } from "../artifacts/registry.ts";
+import { dirname, join, relative } from "node:path";
+import { readRunRecord, removeRunIfStill, runPaths } from "../artifacts/registry.ts";
+import { isFullyTerminalRunRecord, removeLocatorIfOwned, resolvePhysicalRunsDir } from "../orchestrate/prune.ts";
 import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
 import {
 	listRunLocators,
@@ -103,13 +103,23 @@ export async function pruneSubagentRuns(
 	const now = options.now ?? new Date();
 	const nowMs = now.getTime();
 	const result = emptyResult();
+	const scanStartedAt = Date.now();
 	const { locators, invalidCount } = await listRunLocators();
 	result.invalid = invalidCount;
 
 	for (const locator of locators) {
 		result.scanned += 1;
 		try {
-			const paths = runPaths(locator);
+			const probe = runPaths(locator);
+			const physical = await resolvePhysicalRunsDir(probe.cwd, probe.runsDir);
+			// A missing runs root is left to the bounded global locator sweep.
+			if (physical === null) continue;
+			const ref = {
+				cwd: physical.physicalCwd,
+				runsDir: relative(physical.physicalCwd, physical.physicalRunsDir),
+				runId: locator.runId,
+			};
+			const paths = runPaths(ref);
 			const runInfo = await lstat(paths.runDir).catch((error) => {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
 				throw error;
@@ -127,12 +137,12 @@ export async function pruneSubagentRuns(
 				continue;
 			}
 
-			const record = await readRunRecord(locator);
+			const record = await readRunRecord(ref);
 			if (record === null || record.runId !== locator.runId) {
 				result.invalid += 1;
 				continue;
 			}
-			if (record.activeAttemptId !== null) {
+			if (record.activeAttemptId !== null || !isFullyTerminalRunRecord(record, locator.runId)) {
 				result.activeSkipped += 1;
 				continue;
 			}
@@ -142,7 +152,7 @@ export async function pruneSubagentRuns(
 				continue;
 			}
 			const completedAtMs = Date.parse(record.completedAt ?? "");
-			if (!Number.isFinite(completedAtMs)) {
+			if (!Number.isFinite(completedAtMs) || !Number.isFinite(Date.parse(record.updatedAt))) {
 				result.invalid += 1;
 				continue;
 			}
@@ -153,9 +163,18 @@ export async function pruneSubagentRuns(
 
 			result.eligible += 1;
 			if (options.dryRun) continue;
-			await rm(paths.runDir, { recursive: true, force: false });
-			await removeRunLocator(locator.runId);
-			result.deleted += 1;
+			const outcome = await removeRunIfStill(ref, (current) => {
+				const retention = retentionMs(current.status);
+				return current.activeAttemptId === null &&
+					isFullyTerminalRunRecord(current, locator.runId) &&
+					retention !== null && retention >= 0 &&
+					nowMs - Date.parse(current.completedAt ?? "") >= retention;
+			}, {
+				expectedUpdatedAt: record.updatedAt,
+				afterRemove: () => removeLocatorIfOwned(locator.runId, ref.cwd, paths.runsDir, scanStartedAt),
+			});
+			if (outcome === "removed") result.deleted += 1;
+			else result.retained += 1;
 		} catch {
 			result.errors += 1;
 		}
