@@ -45,6 +45,7 @@ const probeValues = {
 	worktreePolicy: "auto",
 	cwd: ".",
 	async: true,
+	surviveParentExit: true,
 	onComplete: "return",
 	timeoutMs: 1000,
 	model: "provider/model",

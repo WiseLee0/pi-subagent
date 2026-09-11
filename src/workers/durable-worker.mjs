@@ -5,6 +5,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+import { monitorParentLifetime } from "./parent-lifetime.mjs";
 
 import {
 	executionInputAfterDurableLaunch,
@@ -357,7 +358,11 @@ async function maybeDelayStartForTests() {
 		process.env.PI_SUBAGENT_DURABLE_WORKER_START_DELAY_MS ?? "0",
 		10,
 	);
-	if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+	if (
+		!Number.isFinite(delayMs) ||
+		delayMs <= 0 ||
+		executionAbort.signal.aborted
+	) return;
 	await Promise.race([
 		sleep(delayMs),
 		new Promise((resolveAbort) =>
@@ -423,6 +428,17 @@ heartbeat = setInterval(() => {
 		.catch(() => undefined);
 }, heartbeatMs);
 heartbeat.unref?.();
+const stopParentMonitor = await monitorParentLifetime({
+	parentIdentity: payload.parentIdentity,
+	// Pre-lifetime payloads have neither host identity nor an explicit policy.
+	// Keep their historical survival behavior; all new non-opt-in launches
+	// persist parentIdentity before spawning. Explicit false still fails closed.
+	surviveParentExit: input?.surviveParentExit ?? (payload.parentIdentity === undefined),
+	verifyProcessIdentity: processIdentity.verifyProcessIdentity,
+	// Reuse the same abort path as SIGINT/SIGTERM: backend-owned process
+	// groups (including grandchildren), workspaces, and terminal finalization.
+	onExit: () => requestCancel("parent process exit"),
+});
 try {
 	await maybeDelayStartForTests();
 	if (executionAbort.signal.aborted) {
@@ -541,6 +557,7 @@ try {
 	process.exitCode = 1;
 	}
 } finally {
+	stopParentMonitor();
 	if (heartbeat !== undefined) clearInterval(heartbeat);
 }
 if (terminalResult !== undefined) {

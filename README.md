@@ -144,6 +144,7 @@ Orchestrators can use the same runtime directly:
 import { runSubagent, getSubagentStatus } from "@agwab/pi-subagent/api";
 
 const run = await runSubagent({ agent: "reviewer", task: "Review this diff.", async: true });
+// Add surviveParentExit: true only when the run should outlive this host.
 const status = await getSubagentStatus({ runId: run.runId });
 ```
 
@@ -151,3 +152,14 @@ const status = await getSubagentStatus({ runId: run.runId });
 
 - [`docs/usage.md`](./docs/usage.md) — full argument reference, code API, `action` behavior, backend selection, sandbox/worktree behavior, artifacts, environment variables, and validation notes.
 - [`docs/api.md`](./docs/api.md) — per-export reference for `@agwab/pi-subagent/api` (runs, prune, durable launch barrier, types).
+
+### Async host lifetime
+
+Async runs default to `surviveParentExit: false`: exiting the launching Pi/API host
+(including `kill -9`) cancels its workers and cleans up their owned execution
+process groups. Tool return, answer completion, and `/reload`, `/new`, `/resume`
+without process exit do not cancel them. Parallel children inherit this policy.
+
+Set `surviveParentExit: true` explicitly to keep running after host exit.
+`onComplete: "detach"` only controls returning/notifying; it does **not** opt out
+of host-lifetime cancellation. See [API/lifetime details](docs/usage.md#async-host-lifetime).

@@ -1,3 +1,4 @@
+import type { ProcessIdentity } from "./process-identity.ts";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
@@ -33,6 +34,8 @@ export interface DurableWorkerTextRef {
 
 export interface DurableWorkerPayload {
 	input: object;
+	/** Launching Pi/API host identity, persisted before detaching the worker. */
+	parentIdentity?: ProcessIdentity;
 	cwd: string;
 	backend: string;
 	runId: string;

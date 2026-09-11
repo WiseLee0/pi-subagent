@@ -146,7 +146,7 @@ try {
 	await mkdir(parentDeathCwd, { recursive: true });
 	const launcher = `
     const { runSubagent } = await import(process.env.API_URL);
-    const run = await runSubagent({ cwd: process.env.RUN_CWD, backend: "inline", model: "missing-provider/missing-model", task: "Provider-free parent-death check.", async: true });
+    const run = await runSubagent({ cwd: process.env.RUN_CWD, backend: "inline", model: "missing-provider/missing-model", task: "Provider-free parent-death check.", async: true, surviveParentExit: true });
     console.log(JSON.stringify({ runId: run.runId, attemptId: run.attemptId }));
   `;
 	const launched = await execFileAsync(

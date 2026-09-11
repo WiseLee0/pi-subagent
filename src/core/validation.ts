@@ -696,6 +696,16 @@ export function validateResolveInput(
 		input.async = asyncValue;
 	}
 
+	if (raw.surviveParentExit !== undefined) {
+		const value = validateBoolean(
+			raw.surviveParentExit,
+			"surviveParentExit",
+			backendForKnownFailure,
+		);
+		if (typeof value !== "boolean") return value;
+		input.surviveParentExit = value;
+	}
+
 	if (raw.durableLaunchBarrier !== undefined) {
 		try {
 			assertDurableLaunchBarrierAnyDescriptor(raw.durableLaunchBarrier);

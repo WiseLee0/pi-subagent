@@ -69,6 +69,7 @@ const SUPPORTED_KEYS = new Set([
 	"worktreePolicy",
 	"cwd",
 	"async",
+	"surviveParentExit",
 	"onComplete",
 	"timeoutMs",
 	"model",
@@ -976,6 +977,9 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			),
 			cwd: Type.Optional(Type.String({ minLength: 1 })),
 			async: Type.Optional(Type.Boolean()),
+			surviveParentExit: Type.Optional(Type.Boolean({
+				description: "Allow async execution to continue after the launching Pi/host process exits. Default false; unrelated to completion notifications.",
+			})),
 			onComplete: Type.Optional(
 				Type.Union(ON_COMPLETE_ACTIONS.map((value) => Type.Literal(value))),
 			),

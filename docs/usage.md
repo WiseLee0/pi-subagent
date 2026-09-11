@@ -113,6 +113,44 @@ await recordSubagentChildEvent({
 
 The code API is ESM-only. Import `@agwab/pi-subagent/api`; do not deep-import internal files such as `src/orchestrate/*` because only documented package subpaths are public. Every export is listed with its signature in [`api.md`](./api.md).
 
+### Async host lifetime
+
+`runSubagent` and the `subagent` tool accept `surviveParentExit?: boolean`
+(default `false`, top-level only). It applies to asynchronous launches, including
+those selected by `onComplete: "detach"` / `"notify"`; synchronous runs are
+unchanged. Parallel tasks inherit the top-level setting. Legacy launch payloads
+with neither a host identity nor an explicit lifetime policy retain their previous
+survival behavior; newly launched workers always persist the host identity unless
+`surviveParentExit: true` is requested.
+
+```ts
+const run = await runSubagent({
+  task: "Long-running background work",
+  async: true,
+  surviveParentExit: true, // explicitly outlive this Pi/API host
+  onComplete: "detach",   // notification policy, not process ownership
+});
+```
+
+By default the detached worker monitors the **launching OS process**, using its
+persisted PID and birth identity, not a session id or the worker's reparented
+`ppid`. Normal exit and `SIGKILL` trigger the existing backend cancellation and
+owned process-group cleanup (including grandchildren), followed by durable
+terminal finalization. The initial check occurs before execution, covering host
+exit during worker initialization. No session shutdown hook is used: tool return,
+answer completion, `/reload`, `/new`, `/resume`, and `/fork` are not process death.
+
+Detection polls roughly every 250 ms after worker initialization; cancellation
+and safe cleanup take additional time. Linux/macOS use the existing process
+identity support (macOS requires the shipped native helper). Unknown identity
+inspection is retried, not treated as proof of death. Unsupported identity
+platforms fail launch rather than fall back to unsafe PID-only ownership.
+This is not an OS-level job containment guarantee: a simultaneously killed or
+blocked worker cannot monitor its host, and descendants deliberately escaping
+owned groups are outside this cleanup guarantee. Existing reconciliation and
+ownership-safety rules still apply. Opt-in survival does not preserve the dead
+host's notification monitor; use status/wait from another process.
+
 ### General durable launch barrier
 
 Code API orchestrators that need release-versus-cancellation ordering should use
@@ -243,7 +281,7 @@ Chain/sequential execution is intentionally not supported by this engine. If ste
 
 ## Async and existing runs
 
-Start a detached run by calling `subagent` with `async: true`, `onComplete: "detach"`, or `onComplete: "notify"`:
+Start an async run (host-bound by default) by calling `subagent` with `async: true`, `onComplete: "detach"`, or `onComplete: "notify"`:
 
 ```json
 {

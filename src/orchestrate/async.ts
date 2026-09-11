@@ -72,6 +72,7 @@ function mergeTaskInput(
 		failFast: undefined,
 		cancelSiblingsOnFailure: undefined,
 		asyncDependency: parent.asyncDependency,
+		surviveParentExit: parent.surviveParentExit,
 		runsDir: parent.runsDir,
 		correlationId: parent.correlationId,
 		parentSessionId: parent.parentSessionId,
@@ -220,6 +221,12 @@ export async function startAsyncSubagentRun(
 	options: StartAsyncSubagentRunOptions,
 ): Promise<ResultEnvelope> {
 	const input = options.input;
+	// Capture the actual API/Pi host, not the detached worker's eventual ppid.
+	// Persist before spawning so death during worker initialization is observable.
+	const parentIdentity =
+		input.surviveParentExit === true
+			? undefined
+			: await captureProcessIdentity(process.pid);
 	const startedAt = new Date();
 	const runId = options.runId ?? createRunId(startedAt);
 	const attemptId = options.attemptId ?? createAttemptId(startedAt);
@@ -240,6 +247,7 @@ export async function startAsyncSubagentRun(
 	const payload = await writeDurableWorkerPayload({
 		payloadPath,
 		input,
+		parentIdentity,
 		cwd: options.cwd,
 		backend: options.backend,
 		runId,

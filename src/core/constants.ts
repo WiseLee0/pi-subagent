@@ -171,6 +171,8 @@ export interface ResolveInput {
 	worktreePolicy?: WorktreePolicy;
 	cwd?: string;
 	async?: boolean;
+	/** Allow async execution to outlive the launching host process. Default false. */
+	surviveParentExit?: boolean;
 	onComplete?: OnCompleteAction;
 	timeoutMs?: number;
 	model?: string;
