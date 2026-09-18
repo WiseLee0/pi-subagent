@@ -142,6 +142,9 @@ function workspaceMeta(workspace: ResolvedWorkspace) {
 		mode: workspace.mode,
 		cwd: workspace.baseCwd,
 		worktreePath: workspace.worktreePath,
+		...(workspace.worktreeBaseCommit === undefined
+			? {}
+			: { worktreeBaseCommit: workspace.worktreeBaseCommit }),
 	};
 }
 
@@ -307,7 +310,6 @@ async function writeParallelErrorResult(options: {
 		startedAt,
 		completedAt,
 		workspace: { mode: "shared", cwd: options.cwd },
-		sandbox: { enabled: Boolean(options.taskInput.sandbox) },
 		exitCode: null,
 		signal: options.cancelled ? "SIGABRT" : null,
 		artifacts: [stderr, output],
@@ -517,7 +519,6 @@ async function writeOwnedExecutionFailure(
 			...prepared.workspaceResult,
 			worktreeCleanupStatus: cleanupStatus,
 		},
-		sandbox: { enabled: Boolean(input.sandbox) },
 		exitCode: null,
 		signal: status === "cancelled" ? "SIGTERM" : null,
 		artifacts: [stderr, output],
@@ -725,7 +726,6 @@ export async function runPreparedSubagentExecution(
 			artifactCwd: baseCwd,
 			signal: options.signal,
 			timeoutMs: input.timeoutMs,
-			sandbox: input.sandbox,
 			runId,
 			attemptId,
 			runsDir: input.runsDir,

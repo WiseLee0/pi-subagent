@@ -24,6 +24,8 @@ export interface ResolvedWorkspace {
   baseCwd: string;
   cwd: string;
   worktreePath: string | null;
+  /** Immutable commit from which this managed worktree was created. */
+  worktreeBaseCommit?: string;
 }
 
 export class WorkspacePolicyError extends Error {
@@ -97,6 +99,7 @@ export async function resolveWorkspace(
       : (requestedPath ??
           defaultWorktreePath(root, options.runId, options.taskIndex)),
   );
+  const worktreeBaseCommit = await gitOutput(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
   await mkdir(dirname(worktreePath), { recursive: true });
   await execFileAsync("git", [
     "-C",
@@ -105,9 +108,9 @@ export async function resolveWorkspace(
     "add",
     "--detach",
     worktreePath,
-    "HEAD",
+    worktreeBaseCommit,
   ]);
-  return { mode: "worktree", baseCwd, cwd: worktreePath, worktreePath };
+  return { mode: "worktree", baseCwd, cwd: worktreePath, worktreePath, worktreeBaseCommit };
 }
 
 /** Write Git output directly to disk, without an in-memory patch size limit. */
@@ -157,6 +160,7 @@ const WORKTREE_DIFF_EXCLUDES = [
 async function captureWorktreeArtifacts(
   result: ResultEnvelope,
   worktreePath: string,
+  baseCommit: string,
   runsDir?: string,
 ): Promise<ArtifactRef[]> {
   const store = await createAttemptArtifactStore({
@@ -166,8 +170,8 @@ async function captureWorktreeArtifacts(
     runsDir,
   });
   const pathspec = [".", ...WORKTREE_DIFF_EXCLUDES];
-  // Intent-to-add makes untracked files visible to diff HEAD, while HEAD makes
-  // both staged and unstaged tracked changes part of the same complete patch.
+  // Compare the final working tree to the launch commit, not the child's HEAD:
+  // committed, staged, unstaged, and untracked changes all belong to the output.
   await gitOutput(worktreePath, ["add", "-N", "--", ...pathspec]);
   const statusPath = store.pathFor("worktree-status");
   await writeFile(statusPath, "");
@@ -183,13 +187,13 @@ async function captureWorktreeArtifacts(
   await writeFile(diffPath, "");
   await appendGitFile(
     worktreePath,
-    [...diffArgs, "--stat", "HEAD", "--", ...pathspec],
+    [...diffArgs, "--stat", baseCommit, "--", ...pathspec],
     diffPath,
   );
   if ((await stat(diffPath)).size > 0) await appendFile(diffPath, "\n");
   await appendGitFile(
     worktreePath,
-    [...diffArgs, "--binary", "HEAD", "--", ...pathspec],
+    [...diffArgs, "--binary", baseCommit, "--", ...pathspec],
     diffPath,
   );
   return [
@@ -238,12 +242,27 @@ export async function finalizeWorktreeResult(
   let cleanupStatus: "removed" | "kept" | "failed" =
     result.status === "completed" ? "removed" : "kept";
   let cleanupError: string | undefined;
+  let worktreeHeadCommit: string | undefined;
+  let worktreeCommitRef: string | undefined;
+  const baseCommit = workspace.worktreeBaseCommit;
 
   try {
+    // Legacy/incomplete workspace metadata must never silently produce a patch
+    // against the wrong baseline and then destroy the only remaining checkout.
+    if (!baseCommit) throw new Error("missing worktree base commit; retaining checkout");
+    worktreeHeadCommit = await gitOutput(workspace.worktreePath, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    if (worktreeHeadCommit !== baseCommit) {
+      const ref = `refs/pi-subagent/${result.runId}/${result.attemptId}`;
+      await gitOutput(workspace.worktreePath, ["check-ref-format", ref]);
+      // Keep detached child commits reachable after worktree removal and Git GC.
+      await gitOutput(workspace.worktreePath, ["update-ref", ref, worktreeHeadCommit]);
+      worktreeCommitRef = ref;
+    }
     artifacts.push(
       ...(await captureWorktreeArtifacts(
         result,
         workspace.worktreePath,
+        baseCommit,
         runsDir,
       )),
     );
@@ -286,6 +305,9 @@ export async function finalizeWorktreeResult(
     durationMs: result.durationMs,
     workspace: {
       ...result.workspace,
+      ...(baseCommit === undefined ? {} : { worktreeBaseCommit: baseCommit }),
+      ...(worktreeHeadCommit === undefined ? {} : { worktreeHeadCommit }),
+      ...(worktreeCommitRef === undefined ? {} : { worktreeCommitRef }),
       worktreeCleanupStatus: cleanupStatus,
       ...(statusRef === undefined
         ? {}
@@ -295,7 +317,6 @@ export async function finalizeWorktreeResult(
         ? {}
         : { worktreeCleanupError: cleanupError }),
     },
-    sandbox: result.sandbox,
     exitCode: result.exitCode,
     signal: result.signal,
     artifacts,

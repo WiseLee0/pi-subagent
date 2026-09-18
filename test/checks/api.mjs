@@ -61,6 +61,20 @@ assert.equal(typeof assertDurableLaunchBarrierV2ExecutionAuthorized, "function")
 assert.equal(typeof DurableLaunchBarrierRevokedError, "function");
 assert.equal(typeof isDurableLaunchBarrierRevokedError, "function");
 
+// Old callers must not silently lose a requested execution boundary.
+for (const sandbox of [undefined, false, null, true, {}]) {
+	for (const options of [
+		{ task: "must not launch", sandbox },
+		{ tasks: [{ task: "must not launch", sandbox }] },
+	]) {
+		await assert.rejects(
+			() => runSubagent(options),
+			(error) => error instanceof SubagentValidationError &&
+				error.failureKind === "validation" && /sandbox.*no longer supported/.test(error.message),
+		);
+	}
+}
+
 let cwd;
 try {
 	await assert.rejects(
@@ -84,12 +98,14 @@ try {
 		startedAt: new Date("2026-01-01T00:00:00.000Z"),
 		completedAt: new Date("2026-01-01T00:00:01.000Z"),
 		workspace: { mode: "shared", cwd },
-		sandbox: { enabled: false },
 		exitCode: 0,
 		signal: null,
 		artifacts: [output],
 		metadata: { contextLengthExceeded: false },
 	});
+	assert.equal(Object.hasOwn(result, "sandbox"), false);
+	const persistedResult = JSON.parse(await readFile(join(cwd, result.artifacts.find(a => a.type === "result").path), "utf8"));
+	assert.equal(Object.hasOwn(persistedResult, "sandbox"), false);
 	await recordSubagentChildEvent({
 		cwd,
 		runId,
@@ -165,7 +181,6 @@ try {
 				completedAt: "2026-01-01T00:00:01.000Z",
 				durationMs: 1000,
 				workspace: { mode: "shared", cwd, worktreePath: null },
-				sandbox: { enabled: false },
 				exitCode: 0,
 				signal: null,
 				artifacts: [

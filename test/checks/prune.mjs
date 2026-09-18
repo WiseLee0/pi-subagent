@@ -289,7 +289,6 @@ try {
 			startedAt: new Date(now - 90 * DAY),
 			completedAt: new Date(now - 90 * DAY),
 			workspace: { mode: "shared", cwd },
-			sandbox: { enabled: false },
 			exitCode: 0,
 			signal: null,
 			artifacts: [],

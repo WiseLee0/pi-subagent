@@ -15,19 +15,10 @@ import type {
 import {
 	abortFailureKind,
 	isFailureKind,
-	sandboxAllowedDomains,
 	type FailureKind,
-	type SandboxInput,
 	type Status,
 } from "../core/constants.ts";
 import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
-import { resolveModelProviderDomains } from "../sandbox/model-network.ts";
-import {
-	createPiAgentSandboxOverlay,
-	mergePiAgentSandboxEnv,
-	SandboxUnavailableError,
-	withSandboxedArgv,
-} from "../sandbox/srt.ts";
 import {
 	preparePrivateTmuxSocket,
 	privateTmuxServerAlive,
@@ -72,8 +63,6 @@ interface RunTmuxProcessOptions {
 	runsDir?: string;
 	timeoutMs?: number;
 	signal?: AbortSignal;
-	sandbox?: SandboxInput | false | null;
-	modelProviderDomains?: readonly string[];
 	workspace?: Partial<ResultWorkspace>;
 	childEnv?: NodeJS.ProcessEnv;
 	onTmuxStart?: RunHeadlessModelOptions["onTmuxStart"];
@@ -697,49 +686,7 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 		}
 	}
 
-	let agentOverlay: Awaited<
-		ReturnType<typeof createPiAgentSandboxOverlay>
-	> | undefined;
 	try {
-		agentOverlay = options.sandbox
-			? await createPiAgentSandboxOverlay(childEnv, cwd)
-			: undefined;
-		if (agentOverlay !== undefined) childEnv = agentOverlay.env;
-		if (options.sandbox) {
-			return await withSandboxedArgv(
-				[process.execPath, scriptPath],
-				{
-					sandbox: options.sandbox,
-					cwd,
-					modelProviderDomains: options.modelProviderDomains,
-					writablePaths: [store.taskDir, agentOverlay!.agentDir],
-					env: childEnv,
-					allowPty: true,
-					signal: options.signal,
-				},
-				async (launch) => {
-					let sandboxEnv = mergePiAgentSandboxEnv(
-						childEnv,
-						launch.env,
-						agentOverlay!,
-					);
-					sandboxEnv = withoutShellStartupAuthority(sandboxEnv);
-					delete sandboxEnv.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
-					const explicitBinding =
-						options.childEnv?.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
-					if (explicitBinding !== undefined)
-						sandboxEnv.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON =
-							explicitBinding;
-					return await runSession(
-						{
-							argv: launch.argv,
-							env: sandboxEnv,
-						},
-						tmuxServerEnv,
-					);
-				},
-			);
-		}
 		return await runSession(
 			{
 				argv: [process.execPath, scriptPath],
@@ -748,56 +695,25 @@ async function runTmuxProcess(options: RunTmuxProcessOptions): Promise<{
 			tmuxServerEnv,
 		);
 	} catch (error) {
-		if (!(error instanceof SandboxUnavailableError)) {
-			if (error instanceof TmuxOwnershipError && error.terminalBlocked === true)
-				throw error;
-			if (await tmuxSessionAlive(plannedTmuxIdentity)) {
-				try {
-					await killTmuxSession(plannedTmuxIdentity);
-				} catch (cleanupError) {
-					throw new TmuxOwnershipError(
-						`tmux execution failed and the private server could not be terminated: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-						{ terminalBlocked: true },
-					);
-				}
-			}
+		if (error instanceof TmuxOwnershipError && error.terminalBlocked === true)
 			throw error;
+		if (await tmuxSessionAlive(plannedTmuxIdentity)) {
+			try {
+				await killTmuxSession(plannedTmuxIdentity);
+			} catch (cleanupError) {
+				throw new TmuxOwnershipError(
+					`tmux execution failed and the private server could not be terminated: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+					{ terminalBlocked: true },
+				);
+			}
 		}
-		return {
-			result: null,
-			store,
-			cwd,
-			artifactCwd,
-			startedAt,
-			failure: {
-				status: "failed",
-				failureKind: "sandbox",
-				exitCode: null,
-				signal: null,
-			},
-			stderr: `${error.message}\n`,
-		};
-	} finally {
-		await agentOverlay?.cleanup();
+		throw error;
 	}
 }
 
 export async function runTmuxModel(
 	options: RunTmuxModelOptions,
 ): Promise<ResultEnvelope> {
-	const modelProviderDomains = resolveModelProviderDomains({
-		model: options.model,
-		env: { ...process.env, ...(options.childEnv ?? {}) },
-	});
-	const sandbox = options.sandbox
-		? {
-				enabled: true,
-				allowedDomains: sandboxAllowedDomains(
-					options.sandbox,
-					modelProviderDomains,
-				),
-			}
-		: { enabled: false };
 	if (typeof options.agent !== "string" || options.agent.length === 0) {
 		throw new Error("agent must be a non-empty string.");
 	}
@@ -812,7 +728,6 @@ export async function runTmuxModel(
 	const { result, store, cwd, artifactCwd, startedAt, failure, stderr } =
 		await runTmuxProcess({
 			...options,
-			modelProviderDomains,
 			argv: buildPiArgv(options),
 		});
 	if (result === null) {
@@ -828,7 +743,6 @@ export async function runTmuxModel(
 			startedAt,
 			completedAt: new Date(),
 			workspace: options.workspace ?? { mode: "shared", cwd },
-			sandbox,
 			exitCode: failure?.exitCode ?? null,
 			signal: failure?.signal ?? null,
 			artifacts,
@@ -878,7 +792,6 @@ export async function runTmuxModel(
 		startedAt,
 		completedAt: new Date(),
 		workspace: options.workspace ?? { mode: "shared", cwd },
-		sandbox,
 		exitCode: meta.exitCode,
 		signal: meta.signal,
 		artifacts: [result.stderrRef, outputRef],

@@ -6,10 +6,6 @@ function workspaceMode(input: ResolveInput): WorkspaceMode {
   return workspace?.mode ?? "shared";
 }
 
-function hasExplicitWorkspaceAuto(input: ResolveInput): boolean {
-  return input.workspace === "auto" || (typeof input.workspace === "object" && input.workspace !== null && input.workspace.mode === "auto");
-}
-
 function worktreePolicy(input: ResolveInput): WorktreePolicy {
   return input.worktreePolicy ?? "auto";
 }
@@ -28,6 +24,5 @@ export function resolveWorktreeIntent(input: ResolveInput): "shared" | "worktree
   if (input.worktree === true || typeof input.worktree === "string") return "worktree";
   if (workspace === "worktree") return "worktree";
   if (policy === "never") return "shared";
-  if (hasExplicitWorkspaceAuto(input) && input.sandbox !== undefined && input.sandbox !== null) return "worktree";
   return "shared";
 }

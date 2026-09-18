@@ -78,7 +78,6 @@ async function syntheticResult(
     startedAt: new Date(Date.now() - 1000),
     completedAt: new Date(),
     workspace,
-    sandbox: { enabled: false },
     exitCode: status === "completed" ? 0 : null,
     signal: null,
     artifacts,
@@ -89,6 +88,77 @@ async function syntheticResult(
 const tempRoot = await mkdtemp(join(tmpdir(), "pi-subagent-worktree-cleanup-"));
 try {
   const repo = await createRepo(tempRoot);
+
+  // Child commits must survive cleanup, and the patch must include both those
+  // commits and any later staged/unstaged/untracked edits.
+  for (const mixed of [false, true]) {
+    const runId = `run_check_committed_${mixed ? "mixed" : "clean"}`;
+    const workspace = await resolveWorkspace({
+      cwd: repo, input: { worktree: true }, runId, taskIndex: 0,
+    });
+    const { stdout: baseline } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo });
+    assert.equal(workspace.worktreeBaseCommit, baseline.trim());
+    await writeFile(join(workspace.cwd, "README.md"), "committed output\n");
+    await writeFile(join(workspace.cwd, "committed.bin"), Buffer.from([0, 1, 2, 255]));
+    await execFileAsync("git", ["add", "."], { cwd: workspace.cwd });
+    await execFileAsync("git", ["-c", "user.name=Pi Check", "-c", "user.email=pi-check@example.invalid", "commit", "-m", "child output"], { cwd: workspace.cwd });
+    const { stdout: childHead } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace.cwd });
+    if (mixed) {
+      await writeFile(join(workspace.cwd, "staged.txt"), "staged output\n");
+      await execFileAsync("git", ["add", "staged.txt"], { cwd: workspace.cwd });
+      await writeFile(join(workspace.cwd, "README.md"), "committed output\nunstaged output\n");
+      await writeFile(join(workspace.cwd, "untracked.txt"), "untracked output\n");
+    }
+    const result = await syntheticResult(repo, runId, "attempt-1", "completed", {
+      mode: "worktree", cwd: repo, worktreePath: workspace.worktreePath,
+    });
+    const finalized = await finalizeWorktreeResult(workspace, result);
+    assert.equal(finalized.workspace.worktreeCleanupStatus, "removed");
+    assert.equal(await pathExists(workspace.cwd), false);
+    assert.equal(finalized.workspace.worktreeBaseCommit, baseline.trim());
+    assert.equal(finalized.workspace.worktreeHeadCommit, childHead.trim());
+    const commitRef = finalized.workspace.worktreeCommitRef;
+    assert.equal(commitRef, `refs/pi-subagent/${runId}/attempt-1`);
+    const { stdout: retainedHead } = await execFileAsync("git", ["rev-parse", commitRef], { cwd: repo });
+    assert.equal(retainedHead.trim(), childHead.trim());
+    // The metadata must survive ResultEnvelope normalization and disk writes.
+    const persisted = JSON.parse(await readFile(join(repo, finalized.artifacts.find(a => a.type === "result").path), "utf8"));
+    assert.equal(persisted.workspace.worktreeCommitRef, commitRef);
+    assert.equal(persisted.workspace.worktreeBaseCommit, baseline.trim());
+    const patchPath = join(repo, finalized.workspace.worktreeDiffPath);
+    const patch = await readFile(patchPath, "utf8");
+    assert.match(patch, /committed output/);
+    assert.match(patch, /GIT binary patch/);
+    assert.equal(await readFile(join(repo, "README.md"), "utf8"), "base\n");
+    // Apply the exported patch to a fresh baseline checkout, verifying actual
+    // recoverability rather than only matching strings in the artifact.
+    const replay = join(tempRoot, `replay-${mixed}`);
+    await execFileAsync("git", ["worktree", "add", "--detach", replay, baseline.trim()], { cwd: repo });
+    try {
+      await execFileAsync("git", ["apply", patchPath], { cwd: replay });
+      assert.equal(await readFile(join(replay, "README.md"), "utf8"), mixed ? "committed output\nunstaged output\n" : "committed output\n");
+      assert.deepEqual(await readFile(join(replay, "committed.bin")), Buffer.from([0, 1, 2, 255]));
+      if (mixed) {
+        assert.equal(await readFile(join(replay, "staged.txt"), "utf8"), "staged output\n");
+        assert.equal(await readFile(join(replay, "untracked.txt"), "utf8"), "untracked output\n");
+      }
+    } finally {
+      await execFileAsync("git", ["worktree", "remove", "--force", replay], { cwd: repo });
+    }
+  }
+
+  // Missing baseline metadata must fail closed, not fall back to current HEAD.
+  const legacyWorkspace = await resolveWorkspace({
+    cwd: repo, input: { worktree: true }, runId: "run_check_missing_baseline",
+  });
+  delete legacyWorkspace.worktreeBaseCommit;
+  const legacyResult = await syntheticResult(repo, "run_check_missing_baseline", "attempt-1", "completed", {
+    mode: "worktree", cwd: repo, worktreePath: legacyWorkspace.worktreePath,
+  });
+  const finalizedLegacy = await finalizeWorktreeResult(legacyWorkspace, legacyResult);
+  assert.equal(finalizedLegacy.workspace.worktreeCleanupStatus, "failed");
+  assert.match(finalizedLegacy.workspace.worktreeCleanupError, /missing worktree base commit/);
+  assert.equal(await pathExists(legacyWorkspace.cwd), true);
 
   const completedWorkspace = await resolveWorkspace({
     cwd: repo,

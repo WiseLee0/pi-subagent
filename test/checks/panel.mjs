@@ -96,7 +96,6 @@ async function writeRun(cwd, runId, attemptId, options) {
 			cwd,
 			worktreePath: options.worktreePath ?? null,
 		},
-		sandbox: { enabled: false },
 		exitCode: options.status === "failed" ? 1 : 0,
 		signal: null,
 		metadata: { contextLengthExceeded: false, ...(options.metadata ?? {}) },

@@ -657,7 +657,6 @@ export async function runInlineModel(
 		startedAt,
 		completedAt,
 		workspace: options.workspace ?? { mode: "shared", cwd },
-		sandbox: { enabled: false },
 		exitCode: null,
 		signal: cancelledByAbort ? "ABORT" : null,
 		artifacts,

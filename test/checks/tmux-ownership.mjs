@@ -37,10 +37,6 @@ import {
 	captureProcessIdentity,
 	verifyProcessIdentity,
 } from "../../src/process-identity.ts";
-import {
-	SandboxUnavailableError,
-	withSandboxedArgv,
-} from "../../src/sandbox/srt.ts";
 import { beginRunRecord } from "../../src/artifacts/index.ts";
 import { checkTmuxRuntimeProbes } from "../fixtures/tmux-runtime-probes.mjs";
 
@@ -242,7 +238,7 @@ await new Promise((resolveSleep) => setTimeout(resolveSleep, 2_000));
 		assert.equal(
 			await pathExists(tmuxShellHookSideEffect),
 			false,
-			"tmux shell startup hooks must not bypass ownership or sandbox gates",
+			"tmux shell startup hooks must not bypass ownership gates",
 		);
 		releaseFinalOwnership();
 		const paneGateResult = await paneGateRun;
@@ -349,98 +345,6 @@ await new Promise((resolveSleep) => setTimeout(resolveSleep, 20_000));
 				expectedKind,
 				`${label} abort after launch records ${expectedKind}`,
 			);
-		}
-
-		const executionError = new TmuxOwnershipError(
-			"sandbox execution callback ownership failure",
-			{ terminalBlocked: true },
-		);
-		let sandboxAvailable = true;
-		try {
-			await withSandboxedArgv(
-				["/bin/echo", "sandbox-wrapper-check"],
-				{ sandbox: true, cwd: paneGateCwd },
-				async () => {
-					throw executionError;
-				},
-			);
-			assert.fail("sandbox execution callback must reject");
-		} catch (error) {
-			if (error instanceof SandboxUnavailableError) {
-				sandboxAvailable = false;
-			} else {
-				assert.equal(error, executionError);
-				assert.equal(error.terminalBlocked, true);
-			}
-		}
-
-		if (sandboxAvailable) {
-			const sandboxPaneSideEffect = join(paneGateCwd, "sandbox-side-effect");
-			await writeFile(
-				paneGatePi,
-				`#!/usr/bin/env node
-import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(sandboxPaneSideEffect)}, "started");
-process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "sandbox-pane-gated" }], provider: "fake", model: "fake/model", usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end" } }) + "\\n");
-await new Promise((resolveSleep) => setTimeout(resolveSleep, 2_000));
-`,
-				{ mode: 0o700 },
-			);
-			let releaseSandboxOwnership;
-			const sandboxOwnershipReleased = new Promise((resolveRelease) => {
-				releaseSandboxOwnership = resolveRelease;
-			});
-			let sandboxOwnershipObserved;
-			const sandboxOwnershipEntered = new Promise((resolveEntered) => {
-				sandboxOwnershipObserved = resolveEntered;
-			});
-			const sandboxPaneRun = runTmuxModel({
-				cwd: paneGateCwd,
-				runId: "run_tmux_sandbox_pane_gate",
-				attemptId: "attempt_tmux_sandbox_pane_gate",
-				piCommand: paneGatePi,
-				agent: "sandbox-pane-gate-worker",
-				task: "wait for final sandbox ownership",
-				timeoutMs: 30_000,
-				sandbox: true,
-				onTmuxStart: async (tmux) => {
-					if (tmux.launchState !== "running") return;
-					sandboxOwnershipObserved();
-					await sandboxOwnershipReleased;
-				},
-			});
-			const sandboxOwnershipReady = await Promise.race([
-				sandboxOwnershipEntered.then(() => true),
-				sandboxPaneRun.then((result) => {
-					if (result.failureKind === "sandbox" && result.stderr?.includes("sandbox"))
-						return false;
-					throw new Error("sandbox tmux exited before final ownership persistence");
-				}),
-			]);
-			if (sandboxOwnershipReady) {
-				await sleep(100);
-				assert.equal(
-					await pathExists(sandboxPaneSideEffect),
-					false,
-					"sandbox tmux pane must retain the final ownership gate",
-				);
-				releaseSandboxOwnership();
-				const sandboxPaneResult = await sandboxPaneRun;
-				for (
-					let index = 0;
-					index < 100 && !(await pathExists(sandboxPaneSideEffect));
-					index += 1
-				)
-					await sleep(10);
-				assert.equal(
-					await pathExists(sandboxPaneSideEffect),
-					true,
-					`sandbox pane did not execute after its ownership gate opened: ${sandboxPaneResult.stderr ?? "no diagnostic"}`,
-				);
-				assert.ok(
-					["completed", "failed", "cancelled"].includes(sandboxPaneResult.status),
-				);
-			}
 		}
 
 		const rejectedPaneSideEffect = join(paneGateCwd, "rejected-side-effect");

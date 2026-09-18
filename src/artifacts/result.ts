@@ -39,16 +39,15 @@ export interface ResultWorkspace {
 	mode: WorkspaceMode;
 	cwd: string;
 	worktreePath: string | null;
+	/** Launch baseline and final child HEAD; the patch is relative to the baseline. */
+	worktreeBaseCommit?: string;
+	worktreeHeadCommit?: string;
+	/** Durable Git ref retaining child commits after managed worktree cleanup. */
+	worktreeCommitRef?: string;
 	worktreeCleanupStatus?: WorktreeCleanupStatus;
 	worktreeStatusPath?: string;
 	worktreeDiffPath?: string;
 	worktreeCleanupError?: string;
-}
-
-export interface ResultSandbox {
-	enabled: boolean;
-	/** Network domains allowed inside the sandbox. Absent or empty means deny-all. */
-	allowedDomains?: string[];
 }
 
 export interface ResultTmuxMetadata {
@@ -146,7 +145,6 @@ export interface ResultEnvelopeInput {
 	completedAt?: string | Date | null;
 	durationMs?: number | null;
 	workspace?: Partial<ResultWorkspace> | null;
-	sandbox?: Partial<ResultSandbox> | null;
 	exitCode?: number | null;
 	signal?: string | null;
 	artifacts?: ArtifactRef[];
@@ -170,7 +168,6 @@ export interface ResultEnvelope {
 	completedAt: string | null;
 	durationMs: number | null;
 	workspace: ResultWorkspace;
-	sandbox: ResultSandbox;
 	exitCode: number | null;
 	signal: string | null;
 	artifacts: ArtifactRef[];
@@ -208,6 +205,15 @@ function normalizeWorkspace(input: ResultEnvelopeInput): ResultWorkspace {
 		mode: workspace.mode ?? "shared",
 		cwd: workspace.cwd ?? input.cwd,
 		worktreePath: workspace.worktreePath ?? null,
+		...(workspace.worktreeBaseCommit === undefined
+			? {}
+			: { worktreeBaseCommit: workspace.worktreeBaseCommit }),
+		...(workspace.worktreeHeadCommit === undefined
+			? {}
+			: { worktreeHeadCommit: workspace.worktreeHeadCommit }),
+		...(workspace.worktreeCommitRef === undefined
+			? {}
+			: { worktreeCommitRef: workspace.worktreeCommitRef }),
 		...(workspace.worktreeCleanupStatus === undefined
 			? {}
 			: { worktreeCleanupStatus: workspace.worktreeCleanupStatus }),
@@ -220,20 +226,6 @@ function normalizeWorkspace(input: ResultEnvelopeInput): ResultWorkspace {
 		...(workspace.worktreeCleanupError === undefined
 			? {}
 			: { worktreeCleanupError: workspace.worktreeCleanupError }),
-	};
-}
-
-function normalizeSandbox(input: ResultEnvelopeInput): ResultSandbox {
-	if (input.sandbox === undefined || input.sandbox === null) {
-		return { enabled: false };
-	}
-
-	return {
-		enabled: input.sandbox.enabled ?? true,
-		...(input.sandbox.allowedDomains === undefined ||
-		input.sandbox.allowedDomains.length === 0
-			? {}
-			: { allowedDomains: input.sandbox.allowedDomains }),
 	};
 }
 
@@ -334,7 +326,6 @@ export function createResultEnvelope(
 		completedAt,
 		durationMs,
 		workspace: normalizeWorkspace(input),
-		sandbox: normalizeSandbox(input),
 		exitCode: input.exitCode ?? null,
 		signal: input.signal ?? null,
 		artifacts: dedupeArtifactRefs(input.artifacts ?? []),

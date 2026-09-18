@@ -34,11 +34,9 @@ try {
     );
   }
 
-  // workspace:auto + sandbox implies isolation, so it must also fail loudly without git.
-  await assert.rejects(
-    resolveWorkspace({ cwd: plainDir, input: { workspace: "auto", sandbox: true }, runId: "run_ws_auto_sandbox", taskIndex: 0 }),
-    (error) => error instanceof WorkspacePolicyError,
-  );
+  // Auto without an explicit isolation request remains shared.
+  const sharedAuto = await resolveWorkspace({ cwd: plainDir, input: { workspace: "auto" }, runId: "run_ws_auto", taskIndex: 0 });
+  assert.equal(sharedAuto.mode, "shared");
 
   console.log(JSON.stringify({ name: "check-workspace-policy", status: "completed" }, null, 2));
 } finally {

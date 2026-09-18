@@ -52,7 +52,6 @@ const TOOL_NAME = "subagent";
 const SUPPORTED_KEYS = new Set([
 	"backend",
 	"visible",
-	"sandbox",
 	"agent",
 	"task",
 	"roleContext",
@@ -100,24 +99,6 @@ const AGENT_TASK_KEYS = [
 	"agentScope",
 	"confirmProjectAgents",
 ];
-const SANDBOX_SCHEMA = Type.Union(
-	[
-		Type.Boolean(),
-		Type.Null(),
-		Type.Object({
-			allowedDomains: Type.Optional(
-				Type.Array(Type.String({ minLength: 1 }), {
-					description:
-						'Additional network domains the sandboxed child may reach, e.g. "github.com" or "*.npmjs.org". The active built-in model provider domain is allowed automatically.',
-				}),
-			),
-		}),
-	],
-	{
-		description:
-			"true = OS sandbox with automatic model-provider egress; { allowedDomains: [...] } adds explicit egress domains; false/null = no sandbox.",
-	},
-);
 const SUBAGENT_TASK_SCHEMA = Type.Object({
 	agent: Type.Optional(Type.String({ minLength: 1 })),
 	task: Type.Optional(Type.String({ minLength: 1 })),
@@ -126,7 +107,6 @@ const SUBAGENT_TASK_SCHEMA = Type.Object({
 		Type.Union(AGENT_SCOPES.map((value) => Type.Literal(value))),
 	),
 	confirmProjectAgents: Type.Optional(Type.Boolean()),
-	sandbox: Type.Optional(SANDBOX_SCHEMA),
 	visible: Type.Optional(Type.Boolean()),
 	cwd: Type.Optional(Type.String({ minLength: 1 })),
 	timeoutMs: Type.Optional(
@@ -297,7 +277,6 @@ function compactResult(result: ResultEnvelope, error?: string) {
 		durationMs: result.durationMs,
 		exitCode: result.exitCode,
 		signal: result.signal,
-		sandbox: result.sandbox,
 		workspace: result.workspace,
 		...(result.tmux === undefined ? {} : { tmux: result.tmux }),
 		...(result.completion === undefined ? {} : { completion: result.completion }),
@@ -656,7 +635,6 @@ async function writeUnsupportedResult(
 		cwd,
 		runsDir: input.runsDir,
 	});
-	const sandboxed = Boolean(input.sandbox);
 	return await store.writeResult({
 		backend,
 		status: "failed",
@@ -665,7 +643,6 @@ async function writeUnsupportedResult(
 		startedAt,
 		completedAt: new Date(),
 		workspace: { mode: "shared", cwd },
-		sandbox: { enabled: sandboxed },
 		exitCode: null,
 		signal: null,
 		artifacts: [],
@@ -915,11 +892,10 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			backend: Type.Optional(
 				Type.Union(BACKENDS.map((value) => Type.Literal(value)), {
 					description:
-						"Worker backend. Defaults to auto. Sandboxed inline requests are promoted to headless because inline cannot enforce an OS sandbox.",
+						"Worker backend. Defaults to auto.",
 				}),
 			),
 			visible: Type.Optional(Type.Boolean()),
-			sandbox: Type.Optional(SANDBOX_SCHEMA),
 			agent: Type.Optional(Type.String({ minLength: 1 })),
 			task: Type.Optional(Type.String({ minLength: 1 })),
 			roleContext: Type.Optional(Type.String({ minLength: 1 })),

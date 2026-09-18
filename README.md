@@ -4,7 +4,7 @@
 
 [![npm](https://img.shields.io/npm/v/@agwab/pi-subagent.svg)](https://www.npmjs.com/package/@agwab/pi-subagent)
 
-`pi-subagent` adds one focused tool: `subagent`. It gives Pi the essentials for isolated worker runs — parallel fan-out, sandbox/worktree controls, durable artifacts, and async status.
+`pi-subagent` adds one focused tool: `subagent`. It gives Pi the essentials for isolated worker runs — parallel fan-out, worktree controls, durable artifacts, and async status.
 
 It is intentionally small, so you can add it to a project when you need subagents and remove it when you do not.
 
@@ -31,7 +31,7 @@ Run three reviewers in parallel for this change.
 ```
 
 ```text
-Run this check in a sandboxed worker and report the artifact paths.
+Run this check in a worker and report the artifact paths.
 ```
 
 ```text
@@ -42,29 +42,9 @@ Start a background audit and let me inspect it in /subagent panel.
 
 Tool: `subagent`
 
-### Sandbox
-
-Run workers in an isolated local execution boundary.
-
-```json
-{
-  "sandbox": true,
-  "agent": "checker",
-  "task": "Run a local check and report the artifact paths."
-}
-```
-
-`sandbox: true` denies all network access. Model-backed sandboxed runs must allow their provider endpoint explicitly:
-
-```json
-{
-  "sandbox": { "allowedDomains": ["api.anthropic.com"] },
-  "agent": "implementer",
-  "task": "Make the requested local change and run the checks."
-}
-```
-
 ### Worktree
+
+Worktrees separate working copies only; they do not provide OS permission or network isolation. Workers retain the host user’s permissions and network access.
 
 Isolate parallel or mutating tasks in managed git worktrees. Workspaces default to shared; request `worktree: true` explicitly for tasks that mutate files in parallel.
 
@@ -150,7 +130,7 @@ const status = await getSubagentStatus({ runId: run.runId });
 
 ## Detailed docs
 
-- [`docs/usage.md`](./docs/usage.md) — full argument reference, code API, `action` behavior, backend selection, sandbox/worktree behavior, artifacts, environment variables, and validation notes.
+- [`docs/usage.md`](./docs/usage.md) — full argument reference, code API, `action` behavior, backend selection, worktree behavior, artifacts, environment variables, and validation notes.
 - [`docs/api.md`](./docs/api.md) — per-export reference for `@agwab/pi-subagent/api` (runs, prune, durable launch barrier, types).
 
 ### Async host lifetime

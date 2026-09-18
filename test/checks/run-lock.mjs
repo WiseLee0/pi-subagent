@@ -60,7 +60,6 @@ try {
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     workspace: { mode: "shared", cwd, worktreePath: null },
-    sandbox: { enabled: false },
     exitCode: 0,
     signal: null,
     artifacts: [],

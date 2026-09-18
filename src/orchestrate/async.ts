@@ -79,10 +79,6 @@ function mergeTaskInput(
 	};
 }
 
-function sandboxEnabled(input: ResolveInput): boolean {
-	return Boolean(input.sandbox);
-}
-
 function armCompletionMonitor(
 	options: StartAsyncSubagentRunOptions & {
 		runId: string;
@@ -264,7 +260,6 @@ export async function startAsyncSubagentRun(
 		startedAt,
 		completedAt: null,
 		workspace: { mode: "shared", cwd: options.cwd },
-		sandbox: { enabled: sandboxEnabled(input) },
 		exitCode: null,
 		signal: null,
 		artifacts: [workerRef],

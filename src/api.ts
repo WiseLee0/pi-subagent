@@ -363,7 +363,6 @@ export type {
 	CompletionMetadata,
 	ResultEnvelope,
 	ResultMetadata,
-	ResultSandbox,
 	ResultSessionDisposition,
 	ResultSessionMetadata,
 	ResultSessionReason,

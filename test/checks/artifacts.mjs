@@ -32,7 +32,6 @@ try {
     startedAt: "2026-06-07T00:00:00.000Z",
     completedAt: "2026-06-07T00:00:00.125Z",
     workspace: { mode: "shared", cwd },
-    sandbox: { enabled: false },
     exitCode: 0,
     signal: null,
     artifacts: [stdoutRef, stderrRef, outputRef],
@@ -58,8 +57,6 @@ try {
   assert.equal(result.workspace.mode, "shared");
   assert.equal(result.workspace.cwd, cwd);
   assert.equal(result.workspace.worktreePath, null);
-  assert.equal(result.sandbox.enabled, false);
-  assert.equal("type" in result.sandbox, false);
   assert.equal(result.exitCode, 0);
   assert.equal(result.signal, null);
   assert.equal(result.metadata.contextLengthExceeded, false);

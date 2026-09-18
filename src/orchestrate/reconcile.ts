@@ -526,7 +526,6 @@ export async function reconcileSubagentRun(
 			}),
 			worktreeCleanupStatus: cleanupStatus,
 		},
-		sandbox: result?.sandbox ?? { enabled: false },
 		exitCode: null,
 		signal: interrupted ? (record.interrupt?.signal ?? null) : null,
 		artifacts: [...(result?.artifacts ?? []), stderr],

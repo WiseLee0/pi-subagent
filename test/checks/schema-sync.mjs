@@ -22,13 +22,13 @@ assert.ok(registeredTool, "subagent tool must register");
 
 const schemaKeys = Object.keys(registeredTool.parameters.properties ?? {});
 assert.ok(schemaKeys.length > 0, "tool schema must expose properties");
+assert.equal(schemaKeys.includes("sandbox"), false);
 
 // Every schema-advertised key must be accepted by the unsupported-keys gate,
 // i.e. either consumed by run input validation or by lifecycle actions.
 const probeValues = {
 	backend: "auto",
 	visible: true,
-	sandbox: true,
 	agent: "worker",
 	task: "inspect",
 	roleContext: "role",
@@ -105,6 +105,7 @@ assert.ok(
 	taskSchemaKeys.includes("captureToolCalls"),
 	"task schema exposes captureToolCalls",
 );
+assert.equal(taskSchemaKeys.includes("sandbox"), false);
 const taskLevel = validateResolveInput({
 	tasks: [{ agent: "worker", task: "inspect", captureToolCalls: true }],
 });

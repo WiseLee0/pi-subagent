@@ -489,7 +489,6 @@ function coerceResultEnvelope(value: unknown): ResultEnvelope | null {
 			cwd: raw.cwd,
 			worktreePath: null,
 		},
-		sandbox: raw.sandbox ?? { enabled: false },
 		exitCode: raw.exitCode ?? null,
 		signal: raw.signal ?? null,
 		artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],

@@ -20,8 +20,6 @@ import {
 	type ResolveInput,
 	type ResolveValidationFailure,
 	type ResolvedBackend,
-	type SandboxInput,
-	type SandboxOptionsInput,
 	type SubagentTaskInput,
 	type ToolResultBudgetInput,
 	type WorkspaceInput,
@@ -201,60 +199,6 @@ function validateTools(
 	return validateStringArray(value, fieldName, backend);
 }
 
-const DOMAIN_PATTERN =
-	/^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
-
-function isAllowedDomainPattern(value: string): boolean {
-	if (value === "localhost") return true;
-	if (!DOMAIN_PATTERN.test(value)) return false;
-	// Reject overly broad wildcards such as "*.com"; require *.example.com shape.
-	if (value.startsWith("*.")) return value.slice(2).includes(".");
-	return true;
-}
-
-function validateSandbox(
-	value: unknown,
-	fieldName: string,
-	backend: ResolvedBackend | undefined,
-): SandboxInput | null | ResolveValidationResult {
-	if (value === null || value === false) return null;
-	if (value === true) return true;
-	if (isRecord(value)) {
-		const sandbox: SandboxOptionsInput = {};
-		const unknownKeys = Object.keys(value).filter(
-			(key) => key !== "allowedDomains",
-		);
-		if (unknownKeys.length > 0) {
-			return failure(
-				`unsupported ${fieldName} option(s): ${unknownKeys.map((key) => `"${key}"`).join(", ")}; supported options are "allowedDomains".`,
-				backend,
-			);
-		}
-		if (value.allowedDomains !== undefined) {
-			const allowedDomains = validateStringArray(
-				value.allowedDomains,
-				`${fieldName}.allowedDomains`,
-				backend,
-			);
-			if (!Array.isArray(allowedDomains)) return allowedDomains;
-			for (const domain of allowedDomains) {
-				if (!isAllowedDomainPattern(domain)) {
-					return failure(
-						`${fieldName}.allowedDomains entry ${formatValue(domain)} must be a bare domain or *.example.com-style wildcard without protocol, path, or port.`,
-						backend,
-					);
-				}
-			}
-			sandbox.allowedDomains = allowedDomains;
-		}
-		return sandbox;
-	}
-	return failure(
-		`${fieldName} must be a boolean or an options object when provided. Use true for a sandbox with automatic model-provider egress, { allowedDomains: [...] } to add network domains, or false/null to disable sandboxing.`,
-		backend,
-	);
-}
-
 function validateTaskItem(
 	value: unknown,
 	fieldName: string,
@@ -308,14 +252,8 @@ function validateTaskItem(
 		task.confirmProjectAgents = confirm;
 	}
 
-	if (value.sandbox !== undefined) {
-		const sandbox = validateSandbox(
-			value.sandbox,
-			`${fieldName}.sandbox`,
-			backend,
-		);
-		if (sandbox !== null && sandbox !== true && "ok" in sandbox) return sandbox;
-		task.sandbox = sandbox;
+	if ("sandbox" in value) {
+		return failure(`${fieldName}.sandbox is no longer supported; workers run without OS or network isolation. Remove this option.`, backend);
 	}
 
 	if (value.visible !== undefined) {
@@ -504,14 +442,8 @@ export function validateResolveInput(
 		input.visible = raw.visible;
 	}
 
-	if (raw.sandbox !== undefined) {
-		const sandbox = validateSandbox(
-			raw.sandbox,
-			"sandbox",
-			backendForKnownFailure,
-		);
-		if (sandbox !== null && sandbox !== true && "ok" in sandbox) return sandbox;
-		input.sandbox = sandbox;
+	if ("sandbox" in raw) {
+		return failure("sandbox is no longer supported; workers run without OS or network isolation. Remove this option.", backendForKnownFailure);
 	}
 
 	if (raw.agent !== undefined) {

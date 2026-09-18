@@ -36,7 +36,6 @@ const plannedInput = {
 	cancelSiblingsOnFailure: true,
 	asyncDependency: "needed-before-final",
 	visible: false,
-	sandbox: true,
 	workspace: { mode: "auto", path: "." },
 	worktree: true,
 	worktreePolicy: "auto",
@@ -239,80 +238,21 @@ assert.equal(childSummary?.total, 1);
 assert.equal(childSummary?.failed, 1);
 assert.equal(childSummary?.latestFailure?.childRunId, "run_child");
 
-// Sandbox object form: explicit per-run network egress (C-style caller control).
-const sandboxObject = validateResolveInput({
-	sandbox: {
-		allowedDomains: ["api.anthropic.com", "*.npmjs.org", "localhost"],
-	},
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(sandboxObject.ok, true);
-assert.deepEqual(sandboxObject.input.sandbox, {
-	allowedDomains: ["api.anthropic.com", "*.npmjs.org", "localhost"],
-});
+// Removed options must fail validation even when their values previously disabled them.
+for (const sandbox of [true, false, null, {}, { allowedDomains: ["api.openai.com"] }]) {
+	for (const input of [
+		{ agent: "worker", task: "inspect", sandbox },
+		{ tasks: [{ agent: "worker", task: "inspect", sandbox }] },
+	]) {
+		const rejected = validateResolveInput(input);
+		assert.equal(rejected.ok, false, `legacy option must be rejected: ${JSON.stringify(input)}`);
+		assert.equal(rejected.failure.failureKind, "validation");
+		assert.match(rejected.failure.error, /sandbox/);
+	}
+}
 
-const sandboxEmptyObject = validateResolveInput({
-	sandbox: {},
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(sandboxEmptyObject.ok, true);
-assert.deepEqual(sandboxEmptyObject.input.sandbox, {});
-
-const sandboxTaskObject = validateResolveInput({
-	mode: "parallel",
-	tasks: [
-		{
-			agent: "scout",
-			task: "audit",
-			sandbox: { allowedDomains: ["api.openai.com"] },
-		},
-	],
-});
-assert.equal(sandboxTaskObject.ok, true);
-assert.deepEqual(sandboxTaskObject.input.tasks[0].sandbox, {
-	allowedDomains: ["api.openai.com"],
-});
-
-const sandboxBadDomain = validateResolveInput({
-	sandbox: { allowedDomains: ["https://api.anthropic.com"] },
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(sandboxBadDomain.ok, false);
-assert.match(sandboxBadDomain.failure.error, /must be a bare domain/);
-
-const sandboxBroadWildcard = validateResolveInput({
-	sandbox: { allowedDomains: ["*.com"] },
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(sandboxBroadWildcard.ok, false);
-assert.match(sandboxBroadWildcard.failure.error, /must be a bare domain/);
-
-const sandboxUnknownKey = validateResolveInput({
-	sandbox: { domains: ["api.anthropic.com"] },
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(sandboxUnknownKey.ok, false);
-assert.match(sandboxUnknownKey.failure.error, /unsupported sandbox option/);
-
-// Validation accepts inline + sandbox so the resolver can promote it to headless.
-const inlineObjectSandbox = validateResolveInput({
-	backend: "inline",
-	sandbox: { allowedDomains: ["api.anthropic.com"] },
-	agent: "worker",
-	task: "inspect",
-});
-assert.equal(inlineObjectSandbox.ok, true);
-assert.deepEqual(inlineObjectSandbox.input.sandbox, {
-	allowedDomains: ["api.anthropic.com"],
-});
-
-// Result envelope records the sandbox network policy.
-const sandboxedResult = createResultEnvelope({
+// Result envelope preserves session and recovery metadata.
+const sessionResult = createResultEnvelope({
 	runId: "run_contracts_002",
 	attemptId: "attempt-contracts-002",
 	backend: "headless",
@@ -321,7 +261,6 @@ const sandboxedResult = createResultEnvelope({
 	cwd: process.cwd(),
 	startedAt: "2026-06-07T00:00:00.000Z",
 	completedAt: "2026-06-07T00:00:00.010Z",
-	sandbox: { enabled: true, allowedDomains: ["api.anthropic.com"] },
 	artifacts: [],
 	metadata: {
 		contextLengthExceeded: false,
@@ -336,21 +275,17 @@ const sandboxedResult = createResultEnvelope({
 		},
 	},
 });
-assert.deepEqual(sandboxedResult.metadata.session, {
+assert.deepEqual(sessionResult.metadata.session, {
 	id: "contract-session",
 	requested: true,
 	disposition: "resumed",
 });
-assert.equal(sandboxedResult.metadata.parentSessionId, "parent-contracts");
-assert.equal(sandboxedResult.metadata.sessionId, "contract-session");
-assert.equal(sandboxedResult.metadata.contextOverflowRecovered, true);
-assert.deepEqual(sandboxedResult.metadata.recoveredStreamErrors, [
+assert.equal(sessionResult.metadata.parentSessionId, "parent-contracts");
+assert.equal(sessionResult.metadata.sessionId, "contract-session");
+assert.equal(sessionResult.metadata.contextOverflowRecovered, true);
+assert.deepEqual(sessionResult.metadata.recoveredStreamErrors, [
 	"context_length_exceeded: compacted",
 ]);
-assert.deepEqual(sandboxedResult.sandbox, {
-	enabled: true,
-	allowedDomains: ["api.anthropic.com"],
-});
 
 const invalid = validateResolveInput({ mode: "fanout" });
 assert.equal(invalid.ok, false);

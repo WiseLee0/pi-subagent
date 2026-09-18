@@ -33,10 +33,6 @@ export function resolveBackend(raw: unknown = {}): ResolveOutput {
   const requested = input.backend ?? "auto";
   const isolation = requiresOutOfProcessBackend(input);
 
-  // An inline worker cannot enforce an OS sandbox. Treat the sandbox request as
-  // the stronger constraint and transparently promote it to a process-backed
-  // headless worker instead of rejecting an otherwise runnable invocation.
-  if (requested === "inline" && input.sandbox) return completed("headless");
   if (requested === "inline" && isolation === "worktree") {
     return failed(
       "inline execution cannot isolate a worktree: it shares the parent process and its extensions, so tools would run in the parent cwd. Use backend headless or tmux, or drop the worktree request.",
@@ -46,7 +42,6 @@ export function resolveBackend(raw: unknown = {}): ResolveOutput {
   if (requested !== "auto") return completed(requested);
 
   if (input.visible) return completed("tmux");
-  if (input.sandbox) return completed("headless");
   if (isolation !== undefined) return completed("headless");
   return completed("inline");
 }

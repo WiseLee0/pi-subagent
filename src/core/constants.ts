@@ -18,7 +18,6 @@ export const FAILURE_KINDS = [
 	"timeout",
 	"abort",
 	"cancelled",
-	"sandbox",
 	"rpc",
 	"model",
 	"provider_error",
@@ -92,26 +91,6 @@ export type WorktreePolicy = (typeof WORKTREE_POLICIES)[number];
 export type OnCompleteAction = (typeof ON_COMPLETE_ACTIONS)[number];
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-export interface SandboxOptionsInput {
-	/**
-	 * Additional network domains the sandboxed child process may reach (e.g.
-	 * "github.com", "*.npmjs.org"). The active model provider domain is added
-	 * automatically. Custom providers that Pi cannot infer must still be listed here.
-	 */
-	allowedDomains?: string[];
-}
-
-export type SandboxInput = true | SandboxOptionsInput;
-
-export function sandboxAllowedDomains(
-	sandbox: SandboxInput | false | null | undefined,
-	modelProviderDomains: readonly string[] = [],
-): string[] {
-	if (sandbox === undefined || sandbox === null || sandbox === false) return [];
-	const additionalDomains = sandbox === true ? [] : (sandbox.allowedDomains ?? []);
-	return Array.from(new Set([...modelProviderDomains, ...additionalDomains]));
-}
-
 export interface WorkspaceInput {
 	mode?: WorkspaceMode;
 	path?: string;
@@ -133,7 +112,6 @@ export interface SubagentTaskInput {
 	roleContext?: string;
 	agentScope?: AgentScope;
 	confirmProjectAgents?: boolean;
-	sandbox?: SandboxInput | false | null;
 	visible?: boolean;
 	cwd?: string;
 	timeoutMs?: number;
@@ -151,7 +129,6 @@ export interface SubagentTaskInput {
 
 export interface ResolveInput {
 	backend?: Backend;
-	sandbox?: SandboxInput | false | null;
 	visible?: boolean;
 	agent?: string;
 	task?: string;

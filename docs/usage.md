@@ -32,7 +32,7 @@ Every call has an `action`. The default is `run`, so omitting `action` starts a 
 
 | `action` | Purpose | Key parameters |
 |---|---|---|
-| `run` (default) | Start a new subagent run, or launch independent runs in parallel. | `agent`/`task` or `tasks`; plus `sandbox`, `worktree`, `model`, `async`, etc. |
+| `run` (default) | Start a new subagent run, or launch independent runs in parallel. | `agent`/`task` or `tasks`; plus `worktree`, `model`, `async`, etc. |
 | `status` | Read a run's current state. | `runId`, optional `cwd`, `attemptId` |
 | `logs` | Read a run's captured logs. | `runId`, optional `cwd`, `attemptId` |
 | `wait` | Block until a run finishes. | `runId`, optional `cwd`, `timeoutMs`, `pollIntervalMs` |
@@ -373,50 +373,13 @@ Deleting a run also removes its global locator. Retention can be tuned with mill
 | `captureToolCalls` | Optional redacted debug telemetry for child tool calls. Defaults to `false`; when `true`, supported live event backends write completed tool call summaries as artifacts without full args/results or update streams. |
 | `toolResultBudget` | Opt-in transcript hygiene for headless children (code API): `{ maxTotalChars }` caps cumulative retained tool-result characters. When a new tool result would exceed the budget, the oldest retained results are replaced with `[evicted tool result: <tool>, <n> chars]` placeholders (the newest result is never evicted); eviction counts land in `metadata.toolResultBudget`. On a context-length failure with at least one evictable result, the run evicts the oldest ~25% of retained tool-result chars and retries once (`metadata.contextRecovered`). Invalid values are ignored with a recorded warning. Default off; behavior without the option is unchanged. |
 
-## Sandbox
+## Execution boundary migration
 
-```json
-{
-  "sandbox": true,
-  "agent": "checker",
-  "task": "Run a local check and report the artifact paths."
-}
-```
-
-Rules:
-
-- `sandbox: true` enables sandboxing and automatically allows the active built-in model Provider domain. `false`, `null`, or omission disables sandboxing.
-- `sandbox: { allowedDomains: [...] }` enables sandboxing, allows the model Provider domain, and adds explicit task-specific network egress.
-- Process-backed workers (`headless`, `tmux`) can be sandboxed.
-- `inline + sandbox` is automatically promoted to `headless` because an in-process SDK worker cannot provide per-worker OS sandboxing.
-- The public API intentionally does not expose sandbox engine selection yet.
-
-### Sandbox network policy
-
-The whole child Pi process runs inside the sandbox boundary, so the model API call itself needs network access. The runtime resolves the active built-in Provider from the requested model or inherited `PI_PROVIDER`/`PI_MODEL` values and automatically adds its model endpoint. `allowedDomains` is for additional task-specific access:
-
-```json
-{
-  "sandbox": { "allowedDomains": ["github.com", "*.npmjs.org"] },
-  "agent": "implementer",
-  "task": "Make the requested local change and run the checks."
-}
-```
-
-Rules:
-
-- Domains are bare hostnames (`api.anthropic.com`) or `*.example.com`-style wildcards. Protocols, paths, ports, and broad wildcards such as `*.com` are rejected.
-- `deniedDomains` is not exposed; the policy is allow-only.
-- If a custom Provider cannot be inferred from Pi's built-in model catalog, list its endpoint explicitly in `allowedDomains`.
-- Fully unrestricted network is intentionally unsupported by sandbox-runtime; use `sandbox: false` when that is required.
-- The effective model and task domains are recorded in the result envelope (`result.sandbox.allowedDomains`) for audit.
-
-Guidance:
-
-- The caller decides per run, following least privilege: list only extra domains the task itself needs (for example `github.com` or `*.npmjs.org` for installs).
-- Do not sandbox open-ended research tasks; the domains they need cannot be enumerated in advance, and headless workers cannot prompt for approval. Use an unsandboxed worker with worktree isolation instead (filesystem safety without network limits).
+Sandbox support has been removed. Remove the legacy `sandbox` option from tool/API calls and parallel task entries, including `false` or `null`: these calls now fail validation rather than silently running without the requested boundary. New results no longer contain `sandbox`, and the `ResultSandbox` type is no longer exported. Use an externally managed container or VM when OS-level restrictions are required.
 
 ## Workspaces and worktrees
+
+Worktrees separate working copies only; they do not provide OS permission or network isolation. Workers retain the host user’s permissions and network access.
 
 There are three inputs for worktree isolation, in order of preference:
 
@@ -455,7 +418,7 @@ completed -> capture status/diff artifacts, then remove the worktree
 failed/cancelled -> capture status/diff artifacts, keep the worktree for debugging
 ```
 
-Worktree evidence is recorded in `result.json` under `workspace.worktreeCleanupStatus`, `workspace.worktreeStatusPath`, and `workspace.worktreeDiffPath`. The status/diff artifacts cover tracked and untracked changes but exclude Pi runtime state the child session writes inside the worktree (`.pi/agent/runs/**`, `.pi/workflows/index.json`, `.pi/workflows/index.lock`); other files under `.pi/` are reported like any other change.
+Worktree evidence is recorded in `result.json` under `workspace.worktreeCleanupStatus`, `workspace.worktreeStatusPath`, and `workspace.worktreeDiffPath`. The diff is relative to `workspace.worktreeBaseCommit` (the immutable launch commit), so it includes child commits as well as staged, unstaged, and untracked changes. `workspace.worktreeHeadCommit` records the final child HEAD. When HEAD differs from the launch commit, `workspace.worktreeCommitRef` records a Git ref under `refs/pi-subagent/<runId>/<attemptId>` that keeps those commits reachable after cleanup; you can inspect it with `git log <ref>` or recover it with `git branch recovered-output <ref>`. These refs are intentionally retained even when run artifacts are pruned; after integrating the output, remove a ref explicitly with `git update-ref -d <ref>`. If the baseline is missing or evidence/ref capture fails, the checkout is retained rather than removed. The status/diff artifacts exclude Pi runtime state the child session writes inside the worktree (`.pi/agent/runs/**`, `.pi/workflows/index.json`, `.pi/workflows/index.lock`); other files under `.pi/` are reported like any other change.
 
 Kept worktrees (from failed or cancelled runs) live in `.pi-subagent-worktrees/` **next to** the repository root, not inside it, and are never pruned automatically. To clean up after debugging:
 
@@ -472,8 +435,7 @@ Backend is optional. When omitted, the engine uses auto-selection:
 | Input condition | Resolved backend |
 |---|---|
 | `visible: true` | `tmux` |
-| `sandbox: true` | `headless`, unless tmux/visible is explicit |
-| worktree isolation requested (`worktree`, `workspace: "worktree"`, `worktreePolicy: "required"`, or `workspace: "auto"` with a sandbox) | `headless` |
+| worktree isolation requested (`worktree`, `workspace: "worktree"`, `worktreePolicy: "required"`) | `headless` |
 | effective cwd (the `cwd` argument, or the extension context's cwd when the argument is omitted) is a directory other than the parent process cwd | `headless` |
 | normal `agent`/`task` | `inline` |
 
@@ -615,7 +577,7 @@ Operator-facing:
 | `PI_SUBAGENT_RUN_LOCATOR_PRUNE_AFTER_MS` | 30 days | Age after which locators are swept (background sweep on locator writes and when the panel lists runs). Negative disables pruning. |
 | `PI_SUBAGENT_HEARTBEAT_MS` | `5000` | Durable-worker heartbeat interval written to the attempt record; reconciliation treats missing heartbeats as liveness evidence. |
 | `PI_SUBAGENT_EVENT_READ_CACHE_MAX` | `64` | Maximum `events.jsonl` files kept in the in-process read cache used by status/wait/panel. `0` disables the cache. |
-| `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi's source agent directory; sandboxed runners copy configuration into a private writable overlay and grant lock paths there, not in the parent agent directory. |
+| `PI_CODING_AGENT_DIR` | `~/.pi/agent` | Pi's agent configuration directory. |
 
 Internal (set by the engine for its own child processes; do not set by hand):
 

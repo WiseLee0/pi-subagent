@@ -26,20 +26,12 @@ import { processGateEnvironment } from "../shell-environment.ts";
 import type {
 	AgentScope,
 	FailureKind,
-	SandboxInput,
 	Status,
 	ThinkingLevel,
 	ToolResultBudgetInput,
 } from "../core/constants.ts";
-import { abortFailureKind, sandboxAllowedDomains } from "../core/constants.ts";
+import { abortFailureKind } from "../core/constants.ts";
 import { PI_SUBAGENT_CHILD_ENV } from "../core/environment.ts";
-import { resolveModelProviderDomains } from "../sandbox/model-network.ts";
-import {
-	createPiAgentSandboxOverlay,
-	mergePiAgentSandboxEnv,
-	SandboxUnavailableError,
-	withSandboxedArgv,
-} from "../sandbox/srt.ts";
 import {
 	flushToolCallTelemetry,
 	ToolCallTelemetryCollector,
@@ -70,7 +62,6 @@ export interface RunHeadlessModelOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	piCommand?: string;
-	sandbox?: SandboxInput | false | null;
 	workspace?: Partial<ResultWorkspace>;
 	model?: string;
 	thinking?: ThinkingLevel;
@@ -1095,10 +1086,6 @@ export async function runHeadlessModel(
 	const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const artifactCwd = resolve(options.artifactCwd ?? cwd);
-	const modelProviderDomains = resolveModelProviderDomains({
-		model: options.model,
-		env: { ...process.env, ...(options.childEnv ?? {}) },
-	});
 	const sessionMetadata = await resultSessionMetadata(cwd, options.sessionId);
 	const startedAt = new Date();
 	const store = await createAttemptArtifactStore({
@@ -1129,8 +1116,6 @@ export async function runHeadlessModel(
 		const inheritedEnv = { ...process.env };
 		delete inheritedEnv.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
 		const explicitEnv = { ...inheritedEnv, ...(options.childEnv ?? {}) };
-		const explicitBinding =
-			options.childEnv?.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
 		const attemptEnv =
 			budgetEnv === undefined
 				? undefined
@@ -1143,85 +1128,20 @@ export async function runHeadlessModel(
 										String(forceEvictFraction),
 								}),
 					};
-		let agentOverlay: Awaited<
-			ReturnType<typeof createPiAgentSandboxOverlay>
-		> | undefined;
-		try {
-			agentOverlay = options.sandbox
-				? await createPiAgentSandboxOverlay(explicitEnv, cwd)
-				: undefined;
-			const childEnv = {
-				...(agentOverlay?.env ?? explicitEnv),
-				[PI_SUBAGENT_CHILD_ENV]: "1",
-			};
-			return options.sandbox
-				? await withSandboxedArgv(
-						argv,
-						{
-							sandbox: options.sandbox,
-							cwd,
-							modelProviderDomains,
-							writablePaths: [store.taskDir, agentOverlay!.agentDir],
-							env: childEnv,
-							signal: options.signal,
-						},
-						(launch) =>
-							runProcess(
-								launch.argv,
-								cwd,
-								timeoutMs,
-								store,
-								options.captureToolCalls,
-								options.signal,
-								(() => {
-									const env = mergePiAgentSandboxEnv(
-										childEnv,
-										launch.env,
-										agentOverlay!,
-										attemptEnv,
-									);
-									delete env.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON;
-									if (explicitBinding !== undefined)
-										env.PI_SUBAGENT_DURABLE_WORKER_BINDING_JSON = explicitBinding;
-									return env;
-								})(),
-								options.onProcessStart,
-							),
-					)
-				: await runProcess(
-						argv,
-						cwd,
-						timeoutMs,
-						store,
-						options.captureToolCalls,
-						options.signal,
-						{ ...childEnv, ...(attemptEnv ?? {}) },
-						options.onProcessStart,
-					);
-		} catch (error) {
-			if (!(error instanceof SandboxUnavailableError)) throw error;
-			const stderrRef = await store.writeTextArtifact(
-				"stderr",
-				`${error.message}\n`,
-			);
-			return {
-				outcome: {
-					status: "failed",
-					failureKind: "sandbox",
-					exitCode: null,
-					signal: null,
-				},
-				stderrRef,
-				toolCallArtifactRefs: [],
-				parsed: emptyParseResult(),
-				stderrText: `${error.message}\n`,
-				stderrContextLengthExceeded: detectContextLengthExceeded({
-					stderrText: error.message,
-				}),
-			};
-		} finally {
-			await agentOverlay?.cleanup();
-		}
+		const childEnv = {
+			...explicitEnv,
+			[PI_SUBAGENT_CHILD_ENV]: "1",
+		};
+		return await runProcess(
+			argv,
+			cwd,
+			timeoutMs,
+			store,
+			options.captureToolCalls,
+			options.signal,
+			{ ...childEnv, ...(attemptEnv ?? {}) },
+			options.onProcessStart,
+		);
 	}
 
 	function analyzeAttempt(attempt: ProcessResult): {
@@ -1289,15 +1209,6 @@ export async function runHeadlessModel(
 		startedAt,
 		completedAt,
 		workspace: options.workspace ?? { mode: "shared", cwd },
-		sandbox: options.sandbox
-			? {
-					enabled: true,
-					allowedDomains: sandboxAllowedDomains(
-						options.sandbox,
-						modelProviderDomains,
-					),
-				}
-			: { enabled: false },
 		exitCode: outcome.exitCode,
 		signal: outcome.signal,
 		artifacts,

@@ -76,7 +76,6 @@ try {
 		startedAt: "2026-01-01T00:00:00.000Z",
 		completedAt: "2026-01-01T00:00:02.000Z",
 		workspace: { mode: "shared", cwd, worktreePath: null },
-		sandbox: { enabled: false },
 		exitCode: 0,
 		signal: null,
 		artifacts: [],
@@ -106,7 +105,6 @@ try {
 		startedAt: "2026-01-01T00:00:00.000Z",
 		completedAt: "2026-01-01T00:00:03.000Z",
 		workspace: { mode: "shared", cwd, worktreePath: null },
-		sandbox: { enabled: false },
 		exitCode: null,
 		signal: "SIGINT",
 		artifacts: [],
@@ -207,7 +205,6 @@ try {
 			startedAt: new Date().toISOString(),
 			completedAt: new Date().toISOString(),
 			workspace: { mode: "shared", cwd, worktreePath: null },
-			sandbox: { enabled: false },
 			exitCode: terminalCase.status === "completed" ? 0 : null,
 			signal: terminalCase.status === "cancelled" ? "SIGTERM" : null,
 			artifacts: [],
@@ -387,7 +384,6 @@ try {
 		startedAt: "2026-01-01T00:00:00.000Z",
 		completedAt: "2026-01-01T00:00:01.000Z",
 		workspace: { mode: "shared", cwd, worktreePath: null },
-		sandbox: { enabled: false },
 		exitCode: 0,
 		signal: null,
 		artifacts: [],
@@ -456,7 +452,6 @@ try {
 		startedAt: "2026-01-01T00:00:00.000Z",
 		completedAt: "2026-01-01T00:00:01.000Z",
 		workspace: { mode: "shared", cwd, worktreePath: null },
-		sandbox: { enabled: false },
 		exitCode: 0,
 		signal: null,
 		artifacts: [],
@@ -524,9 +519,8 @@ try {
 	const asyncFalse = await startAsyncSubagentRun({
 		cwd,
 		backend: "inline",
-		input: { sandbox: false, onComplete: "detach" },
+		input: { onComplete: "detach" },
 	});
-	assert.equal(asyncFalse.sandbox.enabled, false);
 	await waitForSubagent({
 		cwd,
 		runId: asyncFalse.runId,

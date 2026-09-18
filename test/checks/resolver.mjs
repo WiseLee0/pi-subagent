@@ -14,18 +14,13 @@ const cases = [
     expected: { backend: "inline", status: "completed" },
   },
   {
-    name: "omitted backend with sandbox resolves to headless",
-    input: { sandbox: true, agent: "worker", task: "inspect" },
-    expected: { backend: "headless", status: "completed" },
-  },
-  {
-    name: "auto with visible sandbox resolves to tmux",
-    input: { backend: "auto", sandbox: true, visible: true, agent: "worker", task: "inspect" },
+    name: "auto with visible execution resolves to tmux",
+    input: { backend: "auto", visible: true, agent: "worker", task: "inspect" },
     expected: { backend: "tmux", status: "completed" },
   },
   {
-    name: "explicit tmux with sandbox resolves to tmux",
-    input: { backend: "tmux", sandbox: true, agent: "worker", task: "inspect" },
+    name: "explicit tmux resolves to tmux",
+    input: { backend: "tmux", agent: "worker", task: "inspect" },
     expected: { backend: "tmux", status: "completed" },
   },
   {
@@ -33,11 +28,6 @@ const cases = [
     input: { backend: "headless", visible: true, agent: "worker", task: "inspect" },
     expected: { backend: "headless", status: "failed", failureKind: "validation" },
     errorIncludes: "visible execution requires backend",
-  },
-  {
-    name: "inline with sandbox is promoted to headless",
-    input: { backend: "inline", sandbox: true, agent: "worker", task: "inspect" },
-    expected: { backend: "headless", status: "completed" },
   },
   {
     name: "unknown backend fails validation",
