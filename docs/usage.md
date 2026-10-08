@@ -530,6 +530,7 @@ Runs write durable evidence under:
             ├── system-prompt.md
             ├── stdout.log
             ├── stderr.log
+            ├── finalizer.log        # detached terminal-commit process diagnostics
             └── output.log
 ```
 
@@ -538,6 +539,8 @@ Run locks live in the hidden `.locks/` directory beside the run directories (ear
 `worker.json` is the launch payload a detached worker reads once at startup. Long prompt strings are not inlined: the task text is stored in `task.md` and the compiled system prompt (when present) in `system-prompt.md`, and `worker.json` references them as `input.taskRef` / `input.systemPromptRef` with `{ path, bytes, sha256 }`. The worker resolves each reference from the payload's own directory and refuses a sidecar whose size or digest does not match, so the payload digest recorded by the durable launch barrier still binds the prompt bytes. Payloads written by earlier versions with inline `input.task` / `input.systemPrompt` remain valid and are accepted unchanged; a payload may not carry both forms of the same field. Callers that already persist the identical prompt bytes elsewhere may hard-link to these sidecars.
 
 `result.json` carries `metadata.provider`, `metadata.model`, `metadata.usage` (token/cost totals summed across the run's assistant messages), and `metadata.stopReason` on every backend; headless and tmux derive them from Pi's JSON event stream, inline from the SDK session's messages.
+
+Detached workers publish their terminal run status only after the worker and its owned process group have drained. In Electron hosts such as VS Code, the finalizer explicitly uses `ELECTRON_RUN_AS_NODE=1` while keeping its environment otherwise minimal; errors from that process are captured in `finalizer.log`. If `result.json` is terminal but `run.json` stays running, inspect that log before using `action:"reconcile"`. To run the provider-free regression tests against the real host executable, set `PI_SUBAGENT_TEST_ELECTRON_EXEC_PATH` when running `npm run check:lifecycle` and `npm run check:reconcile`.
 
 `run.json` records a `parentSessionId` field: the Pi session id of the session that launched the run, injected from the tool context (not a model-settable argument). Consumers (e.g. status panels) can use it to scope a shared per-`cwd` runs directory to the session that owns each run. The field is omitted when no session id is available, and older records simply lack it.
 

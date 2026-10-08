@@ -148,13 +148,16 @@ try {
     const run = await runSubagent({ cwd: process.env.RUN_CWD, backend: "inline", model: "missing-provider/missing-model", task: "Provider-free parent-death check.", async: true, surviveParentExit: true });
     console.log(JSON.stringify({ runId: run.runId, attemptId: run.attemptId }));
   `;
+	// Opt in to the real VS Code/Electron host for the complete launcher ->
+	// durable worker -> detached finalizer regression (no provider call).
 	const launched = await execFileAsync(
-		process.execPath,
+		process.env.PI_SUBAGENT_TEST_ELECTRON_EXEC_PATH ?? process.execPath,
 		["--input-type=module", "-e", launcher],
 		{
 			cwd: resolve("."),
 			env: {
 				...process.env,
+				ELECTRON_RUN_AS_NODE: "1",
 				API_URL: apiUrl,
 				RUN_CWD: parentDeathCwd,
 				PI_SUBAGENT_HEARTBEAT_MS: "50",

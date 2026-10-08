@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import {
 	access,
 	appendFile,
+	chmod,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -30,6 +31,10 @@ import {
 	verifyProcessIdentity,
 } from "../../src/process-identity.ts";
 import { startAsyncSubagentRun } from "../../src/orchestrate/async.ts";
+import {
+	spawnTerminalFinalizer,
+	terminalFinalizerEnvironment,
+} from "../../src/workers/terminal-finalizer-launch.mjs";
 import {
 	discardSubagentExecution,
 	prepareSubagentExecution,
@@ -181,7 +186,40 @@ try {
 	const finalizerPath = fileURLToPath(
 		new URL("../../src/workers/terminal-finalizer.mjs", import.meta.url),
 	);
-	for (const terminalCase of [
+	assert.deepEqual(
+		terminalFinalizerEnvironment(),
+		{ PATH: "/usr/bin:/bin", LC_ALL: "C", LANG: "C", ELECTRON_RUN_AS_NODE: "1" },
+		"finalizers must use Node mode without inheriting host credentials/options",
+	);
+	// Simulate Electron's mode gate even on machines without Electron installed.
+	const electronModeGate = join(cwd, "electron-mode-gate");
+	await writeFile(
+		electronModeGate,
+		`#!/bin/sh\n[ "$ELECTRON_RUN_AS_NODE" = "1" ] || exit 78\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+	);
+	await chmod(electronModeGate, 0o755);
+	const originalFinalizerEnv = terminalFinalizerEnvironment();
+	delete originalFinalizerEnv.ELECTRON_RUN_AS_NODE;
+	const brokenModeProcess = spawn(electronModeGate, ["--version"], {
+		env: originalFinalizerEnv,
+		stdio: "ignore",
+	});
+	assert.equal(
+		await new Promise((resolveExit) => brokenModeProcess.once("exit", resolveExit)),
+		78,
+		"the pre-fix environment must reproduce Electron's missing Node-mode failure",
+	);
+	const finalizerRuntimes = [
+		{ name: "node", execPath: process.execPath },
+		{ name: "electron-mode-gate", execPath: electronModeGate },
+	];
+	if (process.env.PI_SUBAGENT_TEST_ELECTRON_EXEC_PATH) {
+		finalizerRuntimes.push({
+			name: "electron",
+			execPath: process.env.PI_SUBAGENT_TEST_ELECTRON_EXEC_PATH,
+		});
+	}
+	const terminalCases = [
 		{ status: "completed", failureKind: null, event: "completed" },
 		{ status: "failed", failureKind: "model", event: "failed" },
 		{
@@ -189,9 +227,13 @@ try {
 			failureKind: "user_cancelled",
 			event: "cancelled",
 		},
-	]) {
-		const finalizerRunId = `run_finalizer_${terminalCase.status}`;
-		const finalizerAttemptId = `attempt_finalizer_${terminalCase.status}`;
+	];
+	const finalizerCases = finalizerRuntimes.flatMap((runtime) =>
+		terminalCases.map((terminalCase) => ({ runtime, terminalCase })),
+	);
+	for (const { runtime, terminalCase } of finalizerCases) {
+		const finalizerRunId = `run_finalizer_${runtime.name}_${terminalCase.status}`;
+		const finalizerAttemptId = `attempt_finalizer_${runtime.name}_${terminalCase.status}`;
 		const finalizerStore = await createAttemptArtifactStore({
 			cwd,
 			runId: finalizerRunId,
@@ -236,23 +278,24 @@ try {
 				},
 			],
 		});
-		const finalizerPayload = Buffer.from(
-			JSON.stringify({
-				ref: { cwd, runId: finalizerRunId },
-				attemptId: finalizerAttemptId,
-				status: terminalCase.status,
-				worker: finalizerWorkerIdentity,
-			}),
-		).toString("base64url");
-		const finalizerProcess = spawn(
-			process.execPath,
-			[finalizerPath, finalizerPayload],
-			{ cwd, stdio: "ignore" },
-		);
+		const finalizerProcess = spawnTerminalFinalizer({
+			ref: { cwd, runId: finalizerRunId },
+			attemptId: finalizerAttemptId,
+			status: terminalCase.status,
+			worker: finalizerWorkerIdentity,
+			cwd,
+			execPath: runtime.execPath,
+		});
+		// Production detaches/unrefs; the regression test must wait for it.
+		finalizerProcess.ref();
 		const finalizerExit = await new Promise((resolveExit) =>
 			finalizerProcess.once("exit", resolveExit),
 		);
-		assert.equal(finalizerExit, 0);
+		assert.equal(finalizerExit, 0, `${runtime.name} finalizer should exit cleanly`);
+		const finalizedRecord = await readRunRecord({ cwd, runId: finalizerRunId });
+		assert.equal(finalizedRecord.status, terminalCase.status);
+		assert.equal(finalizedRecord.activeAttemptId, null);
+		assert.equal(finalizedRecord.attempts[0].status, terminalCase.status);
 		const finalizerEvents = await readRunEvents({
 			cwd,
 			runId: finalizerRunId,

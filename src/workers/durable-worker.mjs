@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { monitorParentLifetime } from "./parent-lifetime.mjs";
+import { spawnTerminalFinalizer } from "./terminal-finalizer-launch.mjs";
 
 import {
 	executionInputAfterDurableLaunch,
@@ -99,26 +98,6 @@ async function referenceFromPayloadPath(path) {
 }
 
 const TERMINAL_STATUSES_EARLY = new Set(["completed", "failed", "cancelled"]);
-
-function spawnTerminalFinalizer({ ref, attemptId, status, worker, cwd }) {
-	const finalizerPath = fileURLToPath(
-		new URL("./terminal-finalizer.mjs", import.meta.url),
-	);
-	const finalizerPayload = Buffer.from(
-		JSON.stringify({ ref, attemptId, status, worker }),
-	).toString("base64url");
-	const finalizer = spawn(process.execPath, [finalizerPath, finalizerPayload], {
-		cwd,
-		detached: true,
-		stdio: "ignore",
-		env: {
-			PATH: "/usr/bin:/bin",
-			LC_ALL: "C",
-			LANG: "C",
-		},
-	});
-	finalizer.unref();
-}
 
 /**
  * The launcher has already recorded the attempt as running. If the payload
