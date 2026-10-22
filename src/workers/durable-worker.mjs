@@ -49,7 +49,10 @@ const [
 
 const executionAbort = new AbortController();
 
+let cancelReason;
+
 function requestCancel(signal) {
+	cancelReason ??= signal;
 	executionAbort.abort(
 		constants.userCancelledAbortReason(`durable worker received ${signal}`),
 	);
@@ -544,5 +547,8 @@ if (terminalResult !== undefined) {
 		status: terminalResult.status,
 		worker: workerIdentity,
 		cwd,
+		...(terminalResult.status === "cancelled" && cancelReason !== undefined
+			? { cancelReason }
+			: {}),
 	});
 }

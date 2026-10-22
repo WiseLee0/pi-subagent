@@ -79,6 +79,8 @@ function mergeTaskInput(
 	};
 }
 
+const COMPLETION_MONITOR_TIMEOUT_MS = 7 * 86_400_000;
+
 function armCompletionMonitor(
 	options: StartAsyncSubagentRunOptions & {
 		runId: string;
@@ -95,8 +97,11 @@ function armCompletionMonitor(
 			runsDir: options.input.runsDir,
 			runId: options.runId,
 			attemptId: options.attemptId,
-			timeoutMs: options.input.timeoutMs ?? 86_400_000,
-			pollIntervalMs: 500,
+			// input.timeoutMs is the worker *inactivity* timeout enforced by the
+			// worker itself; it is not a bound on total run time. Using it here made
+			// notifications silently disappear for runs longer than that window.
+			timeoutMs: COMPLETION_MONITOR_TIMEOUT_MS,
+			pollIntervalMs: 1_000,
 		});
 		if (waited.status !== "completed") return;
 		const result = await readRunResult({

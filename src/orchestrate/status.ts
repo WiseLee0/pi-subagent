@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	readRunEvents,
 	readRunRecord,
@@ -23,6 +23,7 @@ import {
 	type ResolvedBackend,
 	type Status,
 } from "../core/constants.ts";
+import { PROGRESS_FILENAME, type RunProgress } from "../runners/progress.ts";
 import { resolveRunRef } from "./run-ref.ts";
 
 const DEFAULT_RUNS_DIR = ".pi/agent/runs";
@@ -124,6 +125,8 @@ export interface RunLogsSnapshot extends RunStatusSnapshot {
 export interface WaitForRunOptions extends RunStatusRef {
 	timeoutMs?: number;
 	pollIntervalMs?: number;
+	/** Stops waiting early (returns `timeout`) without affecting the run. */
+	signal?: AbortSignal;
 }
 
 export interface WaitForRunResult {
@@ -180,8 +183,17 @@ function safeArtifactPath(
 	return path;
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolveSleep) => {
+		if (signal?.aborted) return resolveSleep();
+		const timer = setTimeout(done, ms);
+		function done() {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", done);
+			resolveSleep();
+		}
+		signal?.addEventListener("abort", done, { once: true });
+	});
 }
 
 function artifactFromAttempt(
@@ -702,7 +714,7 @@ export async function waitForRun(
 	const pollIntervalMs = options.pollIntervalMs ?? 500;
 	const deadline = Date.now() + timeoutMs;
 	let snapshot = await getRunStatus(options);
-	while (Date.now() <= deadline) {
+	while (Date.now() <= deadline && options.signal?.aborted !== true) {
 		snapshot = await getRunStatus(options);
 		if (
 			snapshot !== null &&
@@ -710,7 +722,95 @@ export async function waitForRun(
 			snapshot.resultPath !== null
 		)
 			return { status: "completed", outcome: "terminal", snapshot };
-		await sleep(pollIntervalMs);
+		await sleep(pollIntervalMs, options.signal);
 	}
 	return { status: "timeout", outcome: "timeout", snapshot };
+}
+
+function attemptLocation(
+	snapshot: RunStatusSnapshot,
+	cwd: string,
+): { artifactCwd: string; attemptDir: string } | null {
+	const attempt = snapshot.attempts?.find(
+		(candidate) => candidate.attemptId === snapshot.attemptId,
+	);
+	const resultPath = attempt?.resultPath ?? snapshot.resultPath;
+	if (resultPath === null || resultPath === undefined) return null;
+	const resultLog = snapshot.logs.find((log) => log.type === "result");
+	const artifactCwd =
+		attempt?.artifactCwd ?? resultLog?.artifactCwd ?? cwd;
+	return {
+		artifactCwd,
+		attemptDir: dirname(safeArtifactPath(cwd, { path: resultPath, artifactCwd })),
+	};
+}
+
+/** Live progress written by inline/headless runners while the attempt runs. */
+export async function readRunProgress(
+	ref: RunStatusRef,
+	snapshot: RunStatusSnapshot,
+): Promise<RunProgress | null> {
+	try {
+		const { cwd } = pathsFor(ref);
+		const location = attemptLocation(snapshot, cwd);
+		if (location === null) return null;
+		const raw = await readFile(join(location.attemptDir, PROGRESS_FILENAME), "utf8");
+		const parsed = JSON.parse(raw) as RunProgress;
+		return typeof parsed === "object" && parsed !== null ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+export interface RunOutputExcerpt {
+	text: string;
+	truncated: boolean;
+	totalChars: number;
+	path: string;
+}
+
+async function readLogExcerpt(
+	ref: RunStatusRef,
+	snapshot: RunStatusSnapshot,
+	type: RunLogRef["type"],
+	maxChars: number,
+	fromEnd: boolean,
+): Promise<RunOutputExcerpt | null> {
+	try {
+		const { cwd } = pathsFor(ref);
+		const log = snapshot.logs.find((candidate) => candidate.type === type);
+		if (log === undefined) return null;
+		const text = await readFile(safeArtifactPath(cwd, log), "utf8");
+		const truncated = text.length > maxChars;
+		return {
+			text: !truncated
+				? text
+				: fromEnd
+					? text.slice(text.length - maxChars)
+					: text.slice(0, maxChars),
+			truncated,
+			totalChars: text.length,
+			path: log.path,
+		};
+	} catch {
+		return null;
+	}
+}
+
+/** Final assistant output of a terminal attempt (head-truncated to maxChars). */
+export async function readRunOutput(
+	ref: RunStatusRef,
+	snapshot: RunStatusSnapshot,
+	maxChars: number,
+): Promise<RunOutputExcerpt | null> {
+	return await readLogExcerpt(ref, snapshot, "output", maxChars, false);
+}
+
+/** Tail of stderr for failed attempts. */
+export async function readRunStderrTail(
+	ref: RunStatusRef,
+	snapshot: RunStatusSnapshot,
+	maxChars: number,
+): Promise<RunOutputExcerpt | null> {
+	return await readLogExcerpt(ref, snapshot, "stderr", maxChars, true);
 }

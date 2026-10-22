@@ -36,6 +36,7 @@ import {
 	flushToolCallTelemetry,
 	ToolCallTelemetryCollector,
 } from "./tool-call-telemetry.ts";
+import { RunProgressTracker } from "./progress.ts";
 import {
 	CONTEXT_RECOVERY_EVICT_FRACTION,
 	normalizeToolResultBudget,
@@ -692,9 +693,11 @@ async function runProcess(
 
 	const toolCallTelemetry =
 		captureToolCalls === true ? new ToolCallTelemetryCollector() : undefined;
-	const parser = new PiJsonStreamParser((event) =>
-		toolCallTelemetry?.processEvent(event),
-	);
+	const progress = new RunProgressTracker(store.attemptDir);
+	const parser = new PiJsonStreamParser((event) => {
+		toolCallTelemetry?.processEvent(event);
+		progress.processEvent(event);
+	});
 	const stderrStream = createWriteStream(stderrPath, { flags: "w" });
 	let stderrText = "";
 	let stderrContextLengthExceeded = false;
@@ -703,6 +706,7 @@ async function runProcess(
 		stderrStream.end();
 		await once(stderrStream, "finish");
 		const parsed = parser.finish();
+		await progress.close();
 		return {
 			outcome,
 			stderrRef: store.refFor("stderr", await fileBytes(stderrPath)),

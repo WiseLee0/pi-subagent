@@ -21,13 +21,20 @@ export function spawnTerminalFinalizer({
 	status,
 	worker,
 	cwd,
+	cancelReason,
 	execPath = process.execPath,
 }) {
 	const finalizerPath = fileURLToPath(
 		new URL("./terminal-finalizer.mjs", import.meta.url),
 	);
 	const finalizerPayload = Buffer.from(
-		JSON.stringify({ ref, attemptId, status, worker }),
+		JSON.stringify({
+			ref,
+			attemptId,
+			status,
+			worker,
+			...(typeof cancelReason === "string" ? { cancelReason } : {}),
+		}),
 	).toString("base64url");
 	const logPath = join(
 		resolve(ref.cwd, ref.runsDir ?? ".pi/agent/runs"),

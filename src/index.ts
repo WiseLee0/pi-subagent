@@ -44,7 +44,17 @@ import {
 	runParallelSubagentTasks,
 	runSubagentTask,
 } from "./orchestrate/run.ts";
-import { getRunLogs, getRunStatus, waitForRun } from "./orchestrate/status.ts";
+import {
+	getRunLogs,
+	getRunStatus,
+	isTerminalStatus as isTerminalRunStatus,
+	readRunOutput,
+	readRunProgress,
+	readRunStderrTail,
+	waitForRun,
+	type RunStatusRef,
+	type RunStatusSnapshot,
+} from "./orchestrate/status.ts";
 import { showSubagentPanel } from "./panel.ts";
 import { WorkspacePolicyError } from "./workspace/worktree.ts";
 
@@ -253,6 +263,149 @@ function textResult(
 	};
 }
 
+const DEFAULT_WAIT_TIMEOUT_MS = 120_000;
+const MIN_WAIT_TIMEOUT_MS = 15_000;
+const MAX_WAIT_TIMEOUT_MS = 1_800_000;
+const MIN_WAIT_POLL_INTERVAL_MS = 500;
+const OUTPUT_EXCERPT_MAX_CHARS = 12_000;
+const STDERR_TAIL_MAX_CHARS = 2_000;
+
+/**
+ * Runs whose terminal result was already handed to the model (via wait/status
+ * or the synchronous run result). Completion notifications skip these to avoid
+ * waking the parent twice for the same result.
+ */
+const deliveredTerminalRuns = new Set<string>();
+
+function runDeliveryKey(runId: string, attemptId?: string): string {
+	return `${runId}/${attemptId ?? ""}`;
+}
+
+function markDelivered(runId: string, attemptId?: string): void {
+	deliveredTerminalRuns.add(runDeliveryKey(runId, attemptId));
+	deliveredTerminalRuns.add(runDeliveryKey(runId));
+}
+
+function wasDelivered(runId: string, attemptId?: string): boolean {
+	return (
+		deliveredTerminalRuns.has(runDeliveryKey(runId, attemptId)) ||
+		deliveredTerminalRuns.has(runDeliveryKey(runId))
+	);
+}
+
+function usageSummary(metadata: unknown) {
+	if (!isRecord(metadata) || !isRecord(metadata.usage)) return undefined;
+	const usage = metadata.usage;
+	const cost = isRecord(usage.cost) ? usage.cost.total : undefined;
+	return {
+		...(typeof metadata.model === "string" ? { model: metadata.model } : {}),
+		...(typeof usage.totalTokens === "number"
+			? { totalTokens: usage.totalTokens }
+			: {}),
+		...(typeof cost === "number" ? { costUsd: Number(cost.toFixed(4)) } : {}),
+	};
+}
+
+/**
+ * Model-facing view of a run: just what the parent needs to decide its next
+ * step (state, live progress, final output). The full snapshot stays in
+ * `details` and is available via the `logs` action.
+ */
+async function compactSnapshot(
+	ref: RunStatusRef,
+	snapshot: RunStatusSnapshot,
+): Promise<Record<string, unknown>> {
+	const terminal = isTerminalRunStatus(snapshot.status);
+	const attempt = snapshot.attempts?.find(
+		(candidate) => candidate.attemptId === snapshot.attemptId,
+	);
+	const base: Record<string, unknown> = {
+		runId: snapshot.runId,
+		attemptId: snapshot.attemptId,
+		backend: snapshot.backend,
+		status: snapshot.status,
+		failureKind: snapshot.failureKind,
+		startedAt: snapshot.startedAt,
+		completedAt: snapshot.completedAt,
+		durationMs: snapshot.durationMs,
+	};
+	if (!terminal) {
+		const started = Date.parse(snapshot.startedAt);
+		if (Number.isFinite(started)) base.elapsedMs = Date.now() - started;
+		if (attempt?.heartbeatAt !== undefined) base.heartbeatAt = attempt.heartbeatAt;
+		const progress = await readRunProgress(ref, snapshot);
+		if (progress !== null) {
+			base.progress = {
+				updatedAt: progress.updatedAt,
+				assistantMessages: progress.assistantMessages,
+				toolCalls: progress.toolCalls,
+				toolErrors: progress.toolErrors,
+				currentTool: progress.currentTool,
+				recent: progress.recent,
+				...(progress.lastAssistantText === undefined
+					? {}
+					: { lastAssistantText: progress.lastAssistantText }),
+			};
+		}
+		return base;
+	}
+	const usage = usageSummary(snapshot.metadata);
+	if (usage !== undefined && Object.keys(usage).length > 0) base.usage = usage;
+	if (snapshot.metadata?.contextLengthExceeded === true)
+		base.contextLengthExceeded = true;
+	const output = await readRunOutput(ref, snapshot, OUTPUT_EXCERPT_MAX_CHARS);
+	if (output !== null) {
+		base.output = output.text;
+		if (output.truncated)
+			base.outputTruncated = {
+				shownChars: output.text.length,
+				totalChars: output.totalChars,
+				fullOutputPath: output.path,
+			};
+	}
+	if (snapshot.status !== "completed") {
+		const stderr = await readRunStderrTail(ref, snapshot, STDERR_TAIL_MAX_CHARS);
+		if (stderr !== null && stderr.text.trim().length > 0)
+			base.stderrTail = stderr.text;
+		const recentEvents = (snapshot.eventTail ?? [])
+			.slice(-4)
+			.map((event) =>
+				event.message === undefined ? event.type : `${event.type}: ${event.message}`,
+			);
+		if (recentEvents.length > 0) base.recentEvents = recentEvents;
+	}
+	return base;
+}
+
+/** compactResult plus the final output excerpt, for terminal results. */
+async function compactTerminalResult(result: ResultEnvelope) {
+	const compact: Record<string, unknown> = compactResult(result);
+	if (!isTerminalRunStatus(result.status)) return compact;
+	const ref: RunStatusRef = { cwd: result.cwd, runId: result.runId, attemptId: result.attemptId };
+	const snapshot = await getRunStatus(ref).catch(() => null);
+	if (snapshot === null) return compact;
+	const output = await readRunOutput(ref, snapshot, OUTPUT_EXCERPT_MAX_CHARS).catch(() => null);
+	if (output !== null) {
+		compact.output = output.text;
+		if (output.truncated)
+			compact.outputTruncated = {
+				shownChars: output.text.length,
+				totalChars: output.totalChars,
+				fullOutputPath: output.path,
+			};
+	}
+	if (result.status !== "completed") {
+		const stderr = await readRunStderrTail(ref, snapshot, STDERR_TAIL_MAX_CHARS).catch(() => null);
+		if (stderr !== null && stderr.text.trim().length > 0) compact.stderrTail = stderr.text;
+	}
+	return compact;
+}
+
+function clampWaitTimeout(value: number | undefined): number {
+	if (value === undefined) return DEFAULT_WAIT_TIMEOUT_MS;
+	return Math.min(MAX_WAIT_TIMEOUT_MS, Math.max(MIN_WAIT_TIMEOUT_MS, value));
+}
+
 function artifactSummary(artifacts: readonly ArtifactRef[]) {
 	return artifacts.map((artifact) => ({
 		type: artifact.type,
@@ -404,6 +557,7 @@ function optionalNonNegativeNumber(
 async function lifecycleAction(
 	raw: Record<string, unknown>,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<ToolResult | null> {
 	const action = raw.action ?? "run";
 	if (action === "run") return null;
@@ -462,14 +616,27 @@ async function lifecycleAction(
 
 	if (action === "status") {
 		const snapshot = await getRunStatus(ref);
+		if (snapshot === null)
+			return textResult(
+				{ tool: TOOL_NAME, action, status: "failed", error: "run not found", snapshot },
+				true,
+				{ snapshot },
+			);
+		const terminal = isTerminalRunStatus(snapshot.status);
+		if (terminal) markDelivered(snapshot.runId, snapshot.attemptId);
 		return textResult(
 			{
 				tool: TOOL_NAME,
 				action,
-				status: snapshot === null ? "failed" : snapshot.status,
-				snapshot,
+				status: snapshot.status,
+				...(terminal
+					? {}
+					: {
+							hint: "Still running. Prefer one long wait (timeoutMs >= 60000) over repeated status polling; an async run started with onComplete \"notify\" will report back automatically.",
+						}),
+				snapshot: await compactSnapshot(ref, snapshot),
 			},
-			snapshot === null,
+			false,
 			{ snapshot },
 		);
 	}
@@ -567,20 +734,51 @@ async function lifecycleAction(
 		);
 	}
 
+	const requestedTimeout = optionalPositiveNumber(raw.timeoutMs, "timeoutMs");
+	const timeoutMs = clampWaitTimeout(requestedTimeout);
 	const waited = await waitForRun({
 		...ref,
-		timeoutMs: optionalPositiveNumber(raw.timeoutMs, "timeoutMs"),
-		pollIntervalMs: optionalPositiveNumber(raw.pollIntervalMs, "pollIntervalMs"),
+		timeoutMs,
+		pollIntervalMs: Math.max(
+			MIN_WAIT_POLL_INTERVAL_MS,
+			optionalPositiveNumber(raw.pollIntervalMs, "pollIntervalMs") ?? 1_000,
+		),
+		signal,
 	});
-	const isError =
-		waited.status !== "completed" || waited.snapshot?.status !== "completed";
+	const snapshot = waited.snapshot;
+	if (snapshot === null)
+		return textResult(
+			{ tool: TOOL_NAME, action, status: "failed", error: "run not found", snapshot },
+			true,
+			{ waited },
+		);
+	// A wait timeout only means the observation window elapsed; the run itself
+	// is still alive. Report it as a non-error so callers don't treat it as a
+	// failed subagent. Only terminal non-completed runs are errors.
+	const stillRunning =
+		waited.status === "timeout" && !isTerminalRunStatus(snapshot.status);
+	if (!stillRunning) markDelivered(snapshot.runId, snapshot.attemptId);
+	const isError = stillRunning ? false : snapshot.status !== "completed";
 	return textResult(
 		{
 			tool: TOOL_NAME,
 			action,
-			status: waited.status,
-			outcome: waited.outcome,
-			snapshot: waited.snapshot,
+			status: stillRunning ? "running" : snapshot.status,
+			outcome: stillRunning
+				? signal?.aborted
+					? "wait-aborted"
+					: "still-running"
+				: waited.outcome,
+			...(stillRunning
+				? {
+						waitedMs: timeoutMs,
+						...(requestedTimeout !== undefined && requestedTimeout < MIN_WAIT_TIMEOUT_MS
+							? { note: `timeoutMs raised to the ${MIN_WAIT_TIMEOUT_MS}ms minimum to avoid busy polling.` }
+							: {}),
+						hint: "Wait window elapsed but the run is still running normally (not failed). Check progress below; call wait again with a larger timeoutMs or continue other work. Do not restart the task.",
+					}
+				: {}),
+			snapshot: await compactSnapshot(ref, snapshot),
 		},
 		isError,
 		{ waited },
@@ -760,13 +958,47 @@ function completionPayload(result: ResultEnvelope, mode: ExecutionMode) {
 	};
 }
 
-function notifyCompletion(
+function formatDuration(ms: number | null): string {
+	if (ms === null || !Number.isFinite(ms)) return "unknown time";
+	const seconds = Math.round(ms / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+async function completionMessageText(result: ResultEnvelope): Promise<string> {
+	const ref: RunStatusRef = { cwd: result.cwd, runId: result.runId, attemptId: result.attemptId };
+	const snapshot = await getRunStatus(ref).catch(() => null);
+	const lines = [
+		`[subagent ${result.status}] run ${result.runId} (${result.attemptId}) finished in ${formatDuration(result.durationMs)}.`,
+	];
+	if (result.failureKind !== null) lines.push(`failureKind: ${result.failureKind}`);
+	if (snapshot !== null) {
+		const output = await readRunOutput(ref, snapshot, OUTPUT_EXCERPT_MAX_CHARS);
+		if (output !== null && output.text.trim().length > 0) {
+			lines.push("", "Output:", output.text);
+			if (output.truncated)
+				lines.push(
+					"",
+					`(output truncated: showing ${output.text.length}/${output.totalChars} chars; full output at ${output.path})`,
+				);
+		}
+		if (result.status !== "completed") {
+			const stderr = await readRunStderrTail(ref, snapshot, STDERR_TAIL_MAX_CHARS);
+			if (stderr !== null && stderr.text.trim().length > 0)
+				lines.push("", "stderr (tail):", stderr.text);
+		}
+	}
+	return lines.join("\n");
+}
+
+async function notifyCompletion(
 	input: ResolveInput,
 	result: ResultEnvelope,
 	mode: ExecutionMode,
 	onUpdate?: ToolUpdateCallback,
 	ctx?: NotificationContext,
-): number {
+	pi?: ExtensionAPI,
+): Promise<number> {
 	if (input.onComplete !== "notify") return 0;
 	const payload = completionPayload(result, mode);
 	let updatesSent = 0;
@@ -787,6 +1019,33 @@ function notifyCompletion(
 		if (ctx?.ui?.notify) updatesSent += 1;
 	} catch {
 		// Completion notifications must not change the task result.
+	}
+	// The tool call that launched the run has long returned, so onUpdate and
+	// ui.notify cannot reach the model. Inject the result into the conversation
+	// and trigger a turn so the parent agent wakes up without polling — unless
+	// it already consumed this result through wait/status.
+	if (
+		typeof pi?.sendMessage === "function" &&
+		!wasDelivered(result.runId, result.attemptId)
+	) {
+		try {
+			const text = await completionMessageText(result);
+			if (!wasDelivered(result.runId, result.attemptId)) {
+				markDelivered(result.runId, result.attemptId);
+				pi.sendMessage(
+					{
+						customType: "subagent-completion",
+						content: text,
+						display: true,
+						details: payload,
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+				updatesSent += 1;
+			}
+		} catch {
+			// Completion notifications must not change the task result.
+		}
 	}
 	return updatesSent;
 }
@@ -887,7 +1146,7 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 		name: TOOL_NAME,
 		label: "Subagent",
 		description:
-			"Subagent engine. Executes headless/tmux/inline workers; supports workspace:auto/worktree isolation, bounded parallel fanout, async lifecycle lookup, mark-background, reconcile, and conservative interrupt. Workspaces default to shared; set worktree:true for parallel tasks that mutate files.",
+			"Subagent engine. Executes headless/tmux/inline workers; supports workspace:auto/worktree isolation, bounded parallel fanout, async lifecycle lookup, mark-background, reconcile, and conservative interrupt. Workspaces default to shared; set worktree:true for parallel tasks that mutate files. Async runs default to onComplete:\"notify\": the result is posted back into the conversation automatically, so do not poll status/wait in a loop. If blocked on a run, use one long wait (timeoutMs 60000-600000; values below 15000 are raised). wait/status return live progress while running and the final output when done. A wait with outcome \"still-running\" is not a failure; never restart the task because of it.",
 		parameters: Type.Object({
 			backend: Type.Optional(
 				Type.Union(BACKENDS.map((value) => Type.Literal(value)), {
@@ -957,12 +1216,15 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 				description: "Allow async execution to continue after the launching Pi/host process exits. Default false; unrelated to completion notifications.",
 			})),
 			onComplete: Type.Optional(
-				Type.Union(ON_COMPLETE_ACTIONS.map((value) => Type.Literal(value))),
+				Type.Union(ON_COMPLETE_ACTIONS.map((value) => Type.Literal(value)), {
+					description:
+						'"notify" (default for async) posts the result back into the conversation and wakes the agent; "detach" runs in background silently; "return" disables the automatic report.',
+				}),
 			),
 			timeoutMs: Type.Optional(
 				Type.Number({
 					exclusiveMinimum: 0,
-					description: `Worker inactivity timeout in milliseconds. Resets on worker output or SDK events. Default ${DEFAULT_RUN_TIMEOUT_MS}.`,
+					description: `run: worker inactivity timeout in ms (resets on worker activity; default ${DEFAULT_RUN_TIMEOUT_MS}). wait: how long to block (default ${DEFAULT_WAIT_TIMEOUT_MS}, clamped to ${MIN_WAIT_TIMEOUT_MS}-${MAX_WAIT_TIMEOUT_MS}).`,
 				}),
 			),
 			model: Type.Optional(
@@ -1118,7 +1380,7 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 
 			try {
 				const raw = isRecord(params) ? params : {};
-				const lifecycle = await lifecycleAction(raw, cwd);
+				const lifecycle = await lifecycleAction(raw, cwd, signal);
 				if (lifecycle !== null) return lifecycle;
 
 				await maybePruneSubagentRuns().catch(() => undefined);
@@ -1165,6 +1427,13 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 					runCwd,
 					ctx as ProjectAgentApprovalContext,
 				);
+				// Async runs report back by default: without this the parent can only
+				// learn about completion by polling wait/status.
+				if (
+					validation.input.async === true &&
+					validation.input.onComplete === undefined
+				)
+					validation.input.onComplete = "notify";
 				const mode = executionMode(validation.input);
 				const asyncRequested =
 					validation.input.async === true ||
@@ -1183,10 +1452,18 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 										completedMode,
 										onUpdate,
 										ctx as NotificationContext,
+										pi,
 									),
 							)
 						: await runParallelSubagentTasks(validation.input, runCwd, signal);
-					const runs = parallel.results.map((result) => compactResult(result));
+					const runs = asyncRequested
+						? parallel.results.map((result) => compactResult(result))
+						: await Promise.all(
+								parallel.results.map((result) => compactTerminalResult(result)),
+							);
+					if (!asyncRequested)
+						for (const result of parallel.results)
+							markDelivered(result.runId, result.attemptId);
 					const failed =
 						!asyncRequested &&
 						(parallel.failFastTriggered ||
@@ -1222,9 +1499,21 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 								completedMode,
 								onUpdate,
 								ctx as NotificationContext,
+								pi,
 							),
 					});
-					return textResult(compactResult(result), false, { result, resolved });
+					return textResult(
+						{
+							...compactResult(result),
+							...(validation.input.onComplete === "notify"
+								? {
+										hint: "Async run started. Its result will be posted back into this conversation automatically when it finishes; continue other work instead of polling. Use wait only if you are blocked on it (one long wait, timeoutMs >= 60000).",
+									}
+								: {}),
+						},
+						false,
+						{ result, resolved },
+					);
 				}
 
 				const result = await runSubagentTask({
@@ -1254,10 +1543,12 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 						});
 					},
 				});
-				return textResult(compactResult(result), result.status !== "completed", {
-					result,
-					resolved,
-				});
+				markDelivered(result.runId, result.attemptId);
+				return textResult(
+					await compactTerminalResult(result),
+					result.status !== "completed",
+					{ result, resolved },
+				);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				const failureKind =

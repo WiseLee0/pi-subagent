@@ -10,6 +10,7 @@ import {
 	type ResultEnvelope,
 } from "../artifacts/index.ts";
 import type { ResultWorkspace } from "../artifacts/result.ts";
+import { RunProgressTracker } from "./progress.ts";
 import {
 	THINKING_LEVELS,
 	abortFailureKind,
@@ -553,6 +554,7 @@ export async function runInlineModel(
 		options.captureToolCalls === true
 			? new ToolCallTelemetryCollector()
 			: undefined;
+	const progress = new RunProgressTracker(store.attemptDir, startedAt);
 
 	try {
 		const { module: piSdk, source } = await importPiSdk();
@@ -588,6 +590,7 @@ export async function runInlineModel(
 
 		const unsubscribe = session.subscribe?.((event) => {
 			toolCallTelemetry?.processEvent(event);
+			progress.processEvent(event);
 			stdoutText += maybeTextDelta(event);
 			const agentEndText = maybeAssistantTextFromAgentEnd(event);
 			if (agentEndText.length > 0) outputText = agentEndText;
@@ -632,6 +635,7 @@ export async function runInlineModel(
 		stderrText += "Inline SDK session completed without assistant output.\n";
 	}
 
+	await progress.close();
 	toolCallArtifactRefs = await flushToolCallTelemetry(toolCallTelemetry, store);
 
 	const completedAt = new Date();

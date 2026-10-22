@@ -39,7 +39,10 @@ for (let index = 0; index < 100; index += 1) {
 		await artifacts.appendTerminalEventsIfCurrent(payload.ref, {
 			attemptId: payload.attemptId,
 			status: payload.status,
-			attemptMessage: "durable worker exited and ownership was drained",
+			attemptMessage:
+				typeof payload.cancelReason === "string"
+					? `durable worker cancelled (${payload.cancelReason}) and ownership was drained`
+					: "durable worker exited and ownership was drained",
 			runMessage: `run ${payload.status}`,
 		});
 		process.exit(0);
