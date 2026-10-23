@@ -24,6 +24,7 @@ import {
 	type ResolveValidationFailure,
 	type ResolvedBackend,
 } from "./core/constants.ts";
+import { PI_SUBAGENT_CHILD_ENV } from "./core/environment.ts";
 import { resolveBackend } from "./core/resolver.ts";
 import { clip } from "./core/text-width.ts";
 import { validateResolveInput } from "./core/validation.ts";
@@ -109,9 +110,52 @@ const AGENT_TASK_KEYS = [
 	"agentScope",
 	"confirmProjectAgents",
 ];
+const TASK_PARAM_DESCRIPTION =
+	"Self-contained brief for the worker. It cannot see this conversation: include the goal, relevant paths/symbols, constraints, whether to edit files or only research, and what the final report must contain.";
+
+// Prompt surface. Ordered like Claude Code's Agent tool / OpenCode's task tool:
+// purpose -> when to use -> when not to use -> how to brief -> mechanics.
+// Wording stays calm on purpose: recent models over-trigger on "MUST/CRITICAL".
+const SUBAGENT_TOOL_DESCRIPTION = [
+	"Delegate a task to an autonomous Pi worker that runs in its own fresh context and returns a final report. Use it to parallelize independent work and to keep large explorations out of the main context.",
+	"",
+	"When to use:",
+	"- Open-ended research or exploration spanning many files/modules, where you would otherwise read a lot of code just to find what matters.",
+	"- Two or more independent subtasks (e.g. investigate several modules, review several areas of a diff, compare several approaches): launch them together with mode:\"parallel\" + tasks[].",
+	"- Independent review/verification of your own change, or trying an experimental change in isolation (worktree:true).",
+	"- Long-running work you can keep going without (async:true); the result is posted back automatically.",
+	"",
+	"When not to use:",
+	"- Needle lookups (a known file, symbol, or string): use read/grep/find directly.",
+	"- Small or sequential tasks, single-file edits, or steps that depend on context built up in this conversation.",
+	"",
+	"Briefing:",
+	"- The worker starts with no memory of this conversation. Write a self-contained task: goal, background, relevant paths, constraints, whether it may edit files or should only research, and the exact shape of the report you want back.",
+	"- The report is visible only to you, not the user. Verify important claims and summarize the outcome for the user yourself.",
+	"- Prefer one parallel call over several sequential single calls. Parallel workers that edit files need worktree:true.",
+	"",
+	"Mechanics: headless/tmux/inline backends; workspace shared by default, worktree:true for isolation. Async runs default to onComplete:\"notify\": the result arrives as a new message, so do not poll status/wait in a loop. If blocked on a run, use one long wait (timeoutMs 60000-600000; values below 15000 are raised). wait/status return live progress while running and the final output when done; outcome \"still-running\" is not a failure, never restart the task because of it. Other actions (status/logs/interrupt/mark-background/reconcile/prune) operate on an existing runId.",
+].join("\n");
+
+const SUBAGENT_PROMPT_SNIPPET =
+	"Delegate independent or context-heavy subtasks to autonomous workers with fresh context (supports parallel fan-out and worktree isolation)";
+
+const SUBAGENT_PROMPT_GUIDELINES = [
+	"Subagents trade extra latency and tokens for context isolation and parallelism: a worker explores in its own context and returns only a compact report. Delegate when that trade clearly pays off, not by default.",
+	"Good fits: work that splits into independent parts that each need substantial exploration (several modules, services, or review dimensions), or an open-ended search whose intermediate reading you will not need afterwards. Launch independent parts together in one mode:\"parallel\" call.",
+	"Work directly when you already know where to look, the task is small or sequential, or it depends on context from this conversation. Subagent briefs must be self-contained because workers cannot see this conversation.",
+];
+
+// Inside a worker the delegation nudge is withheld so workers do not fan out recursively.
+const SUBAGENT_CHILD_PROMPT_GUIDELINES = [
+	"You are running as a subagent worker: do the task yourself and do not delegate to further subagents unless the task explicitly asks for it.",
+];
+
 const SUBAGENT_TASK_SCHEMA = Type.Object({
 	agent: Type.Optional(Type.String({ minLength: 1 })),
-	task: Type.Optional(Type.String({ minLength: 1 })),
+	task: Type.Optional(
+		Type.String({ minLength: 1, description: TASK_PARAM_DESCRIPTION }),
+	),
 	roleContext: Type.Optional(Type.String({ minLength: 1 })),
 	agentScope: Type.Optional(
 		Type.Union(AGENT_SCOPES.map((value) => Type.Literal(value))),
@@ -1142,11 +1186,15 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 		});
 	}
 
+	const isSubagentChild = process.env[PI_SUBAGENT_CHILD_ENV] === "1";
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Subagent",
-		description:
-			"Subagent engine. Executes headless/tmux/inline workers; supports workspace:auto/worktree isolation, bounded parallel fanout, async lifecycle lookup, mark-background, reconcile, and conservative interrupt. Workspaces default to shared; set worktree:true for parallel tasks that mutate files. Async runs default to onComplete:\"notify\": the result is posted back into the conversation automatically, so do not poll status/wait in a loop. If blocked on a run, use one long wait (timeoutMs 60000-600000; values below 15000 are raised). wait/status return live progress while running and the final output when done. A wait with outcome \"still-running\" is not a failure; never restart the task because of it.",
+		description: SUBAGENT_TOOL_DESCRIPTION,
+		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
+		promptGuidelines: isSubagentChild
+			? SUBAGENT_CHILD_PROMPT_GUIDELINES
+			: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
 			backend: Type.Optional(
 				Type.Union(BACKENDS.map((value) => Type.Literal(value)), {
@@ -1156,16 +1204,27 @@ export default function registerSubagentEngine(pi: ExtensionAPI) {
 			),
 			visible: Type.Optional(Type.Boolean()),
 			agent: Type.Optional(Type.String({ minLength: 1 })),
-			task: Type.Optional(Type.String({ minLength: 1 })),
+			task: Type.Optional(
+				Type.String({ minLength: 1, description: TASK_PARAM_DESCRIPTION }),
+			),
 			roleContext: Type.Optional(Type.String({ minLength: 1 })),
 			agentScope: Type.Optional(
 				Type.Union(AGENT_SCOPES.map((value) => Type.Literal(value))),
 			),
 			confirmProjectAgents: Type.Optional(Type.Boolean()),
 			mode: Type.Optional(
-				Type.Union(EXECUTION_MODES.map((value) => Type.Literal(value))),
+				Type.Union(EXECUTION_MODES.map((value) => Type.Literal(value)), {
+					description:
+						'"single" runs one task; "parallel" runs tasks[] concurrently (bounded by concurrency).',
+				}),
 			),
-			tasks: Type.Optional(Type.Array(SUBAGENT_TASK_SCHEMA, { minItems: 1 })),
+			tasks: Type.Optional(
+				Type.Array(SUBAGENT_TASK_SCHEMA, {
+					minItems: 1,
+					description:
+						'Independent tasks for mode:"parallel". Each entry needs its own self-contained task brief.',
+				}),
+			),
 			concurrency: Type.Optional(
 				Type.Number({
 					minimum: 1,
